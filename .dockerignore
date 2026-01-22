@@ -1,0 +1,7 @@
+# Ignore everything by default, then explicitly include what Docker needs
+*
+
+# Include the pre-built JAR only
+!build/
+!build/libs/
+!build/libs/*.jar

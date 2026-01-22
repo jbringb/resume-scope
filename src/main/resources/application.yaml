@@ -1,0 +1,44 @@
+spring:
+  application:
+    name: resume-scope
+
+  datasource:
+    url:               ${SPRING_DATASOURCE_URL:jdbc:postgresql://${PGHOST:localhost}:${PGPORT:5432}/${PGDATABASE:resumescope}}
+    username:          ${SPRING_DATASOURCE_USERNAME:${PGUSER:resumescope}}
+    password:          ${SPRING_DATASOURCE_PASSWORD:${PGPASSWORD:resumescope}}
+    driver-class-name: org.postgresql.Driver
+
+  jooq:
+    sql-dialect: postgres
+
+  flyway:
+    enabled:   true
+    locations: classpath:db/migration
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:change-me}
+      chat:
+        options:
+          model:       gpt-4o-mini
+          temperature: 0.0
+
+  codec:
+    max-in-memory-size: 50MB
+
+server:
+  port: ${PORT:8086}
+
+logging:
+  charset:
+    console: UTF-8
+  level:
+    root: DEBUG
+  structured:
+    format:
+      console: ${LOGGING_STRUCTURED_FORMAT_CONSOLE:ecs}
+    ecs:
+      service:
+        name: ${spring.application.name}
+        version: ${APP_VERSION:}
+        environment: ${DEPLOYMENT_ENV:}

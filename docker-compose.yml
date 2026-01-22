@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB:       resumescope
+      POSTGRES_USER:     resumescope
+      POSTGRES_PASSWORD: resumescope
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U resumescope -d resumescope"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  resume-scope:
+    build: .
+    ports:
+      - "8086:8086"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
+    environment:
+      PORT: "8086"
+      SPRING_DATASOURCE_URL:      jdbc:postgresql://postgres:5432/resumescope
+      SPRING_DATASOURCE_USERNAME: resumescope
+      SPRING_DATASOURCE_PASSWORD: resumescope
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
