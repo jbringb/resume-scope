@@ -1,0 +1,10 @@
+spring:
+  ai:
+    openai:
+      # No trailing /v1 - Spring AI appends /v1/chat/completions (double /v1 breaks vLLM).
+      base-url: ${OPENAI_BASE_URL:http://localhost:8000}
+      api-key: ${OPENAI_API_KEY:local-dummy}
+      chat:
+        options:
+          model: ${OPENAI_MODEL:Qwen/Qwen3-4B-Instruct-2507}
+          temperature: 0.0
