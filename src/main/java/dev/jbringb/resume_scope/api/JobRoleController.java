@@ -3,6 +3,7 @@ package dev.jbringb.resume_scope.api;
 import dev.jbringb.resume_scope.api.dto.JobRoleRequest;
 import dev.jbringb.resume_scope.api.dto.JobRoleResponse;
 import dev.jbringb.resume_scope.service.JobRoleService;
+import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -30,7 +31,7 @@ public class JobRoleController {
     }
 
     @PostMapping
-    public Mono<JobRoleResponse> create(@RequestBody JobRoleRequest body) {
+    public Mono<JobRoleResponse> create(@Valid @RequestBody JobRoleRequest body) {
         return Mono.fromCallable(() -> jobRoleService.create(body)).subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -40,7 +41,7 @@ public class JobRoleController {
     }
 
     @PutMapping("/{id}")
-    public Mono<JobRoleResponse> update(@PathVariable UUID id, @RequestBody JobRoleRequest body) {
+    public Mono<JobRoleResponse> update(@PathVariable UUID id, @Valid @RequestBody JobRoleRequest body) {
         return Mono.fromCallable(() -> jobRoleService.update(id, body)).subscribeOn(Schedulers.boundedElastic());
     }
 
