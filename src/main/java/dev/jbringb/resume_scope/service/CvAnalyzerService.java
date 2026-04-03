@@ -97,7 +97,7 @@ public class CvAnalyzerService {
     }
 
     private void applyRanks(UUID runId) {
-        var ordered = analysisRepo.findByAnalysisRunId(runId);
+        var ordered = analysisRepo.findByAnalysisRunIdOrderByScoreDesc(runId);
         int rank = 1;
         for (var row : ordered) {
             analysisRepo.updateRank(row.getId(), rank++);
