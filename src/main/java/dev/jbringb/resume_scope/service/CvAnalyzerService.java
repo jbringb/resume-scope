@@ -116,12 +116,13 @@ public class CvAnalyzerService {
         return s == null || s.isBlank() ? null : s.strip();
     }
 
-    private AiJson analyzeWithLlm(JobRoleRecord role, CandidateRecord candidate, String cvText) throws Exception {
+    private CvAnalysisResult analyzeWithLlm(JobRoleRecord role, CandidateRecord candidate, String cvText)
+            throws Exception {
         String prompt = buildUserPrompt(role, candidate, cvText);
         var raw = chatClient.prompt().user(prompt).call().content();
         var json = stripMarkdownFences(raw);
-        var parsed = objectMapper.readValue(json, AiJson.class);
-        return new AiJson(
+        var parsed = objectMapper.readValue(json, CvAnalysisResult.class);
+        return new CvAnalysisResult(
                 parsed.overallScore(),
                 parsed.strengths() == null ? List.of() : parsed.strengths(),
                 parsed.weaknesses() == null ? List.of() : parsed.weaknesses(),
@@ -168,7 +169,7 @@ public class CvAnalyzerService {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record AiJson(
+    private record CvAnalysisResult(
             int overallScore,
             List<String> strengths,
             List<String> weaknesses,

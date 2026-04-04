@@ -23,31 +23,31 @@ import reactor.core.scheduler.Schedulers;
 @RequiredArgsConstructor
 public class JobRoleController {
 
-    private final JobRoleService jobRoleService;
+    private final JobRoleService jobRoleSvc;
 
     @GetMapping
     public Mono<List<JobRoleResponse>> list() {
-        return Mono.fromCallable(jobRoleService::list).subscribeOn(Schedulers.boundedElastic());
+        return Mono.fromCallable(jobRoleSvc::list).subscribeOn(Schedulers.boundedElastic());
     }
 
     @PostMapping
     public Mono<JobRoleResponse> create(@Valid @RequestBody JobRoleRequest body) {
-        return Mono.fromCallable(() -> jobRoleService.create(body)).subscribeOn(Schedulers.boundedElastic());
+        return Mono.fromCallable(() -> jobRoleSvc.create(body)).subscribeOn(Schedulers.boundedElastic());
     }
 
     @GetMapping("/{id}")
     public Mono<JobRoleResponse> get(@PathVariable UUID id) {
-        return Mono.fromCallable(() -> jobRoleService.get(id)).subscribeOn(Schedulers.boundedElastic());
+        return Mono.fromCallable(() -> jobRoleSvc.get(id)).subscribeOn(Schedulers.boundedElastic());
     }
 
     @PutMapping("/{id}")
     public Mono<JobRoleResponse> update(@PathVariable UUID id, @Valid @RequestBody JobRoleRequest body) {
-        return Mono.fromCallable(() -> jobRoleService.update(id, body)).subscribeOn(Schedulers.boundedElastic());
+        return Mono.fromCallable(() -> jobRoleSvc.update(id, body)).subscribeOn(Schedulers.boundedElastic());
     }
 
     @DeleteMapping("/{id}")
     public Mono<Void> delete(@PathVariable UUID id) {
-        return Mono.fromRunnable(() -> jobRoleService.delete(id))
+        return Mono.fromRunnable(() -> jobRoleSvc.delete(id))
                 .subscribeOn(Schedulers.boundedElastic())
                 .then();
     }

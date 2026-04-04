@@ -17,15 +17,15 @@ import reactor.core.scheduler.Schedulers;
 @RequiredArgsConstructor
 public class AnalysisRunController {
 
-    private final AnalysisService analysisService;
+    private final AnalysisService analysisSvc;
 
     @GetMapping("/{runId}")
     public Mono<AnalysisRunResponse> getRun(@PathVariable UUID runId) {
-        return Mono.fromCallable(() -> analysisService.getRun(runId)).subscribeOn(Schedulers.boundedElastic());
+        return Mono.fromCallable(() -> analysisSvc.getRun(runId)).subscribeOn(Schedulers.boundedElastic());
     }
 
     @GetMapping("/{runId}/results")
     public Mono<JobRoleResultsResponse> results(@PathVariable UUID runId) {
-        return Mono.fromCallable(() -> analysisService.resultsForRun(runId)).subscribeOn(Schedulers.boundedElastic());
+        return Mono.fromCallable(() -> analysisSvc.resultsForRun(runId)).subscribeOn(Schedulers.boundedElastic());
     }
 }

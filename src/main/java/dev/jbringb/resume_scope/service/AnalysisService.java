@@ -30,7 +30,7 @@ public class AnalysisService {
     private final CandidateRepository candidateRepo;
     private final AnalysisRunRepository analysisRunRepo;
     private final AnalysisRepository analysisRepo;
-    private final CvAnalyzerService cvAnalyzerService;
+    private final CvAnalyzerService cvAnalyzerSvc;
     private final ObjectMapper objectMapper;
 
     public TriggerAnalysisResponse triggerAnalysis(UUID jobRoleId) {
@@ -43,7 +43,7 @@ public class AnalysisService {
         }
         var run = analysisRunRepo.insertPending(jobRoleId);
         log.info("Analysis run inserted: {}", run.getId());
-        cvAnalyzerService.processAnalysisRunAsync(run.getId());
+        cvAnalyzerSvc.processAnalysisRunAsync(run.getId());
         return new TriggerAnalysisResponse(run.getId());
     }
 

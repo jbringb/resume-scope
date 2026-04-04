@@ -22,21 +22,21 @@ import reactor.core.publisher.Mono;
 @RequiredArgsConstructor
 public class JobRoleCandidateController {
 
-    private final CandidateService candidateService;
+    private final CandidateService candidateSvc;
 
     @GetMapping
     public Mono<List<CandidateResponse>> list(@PathVariable UUID jobRoleId) {
-        return candidateService.list(jobRoleId);
+        return candidateSvc.list(jobRoleId);
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Mono<List<CandidateResponse>> upload(
             @PathVariable UUID jobRoleId, @RequestPart("files") Flux<FilePart> files) {
-        return candidateService.uploadPdfs(jobRoleId, files);
+        return candidateSvc.uploadPdfs(jobRoleId, files);
     }
 
     @DeleteMapping("/{candidateId}")
     public Mono<Void> delete(@PathVariable UUID jobRoleId, @PathVariable UUID candidateId) {
-        return candidateService.delete(jobRoleId, candidateId);
+        return candidateSvc.delete(jobRoleId, candidateId);
     }
 }

@@ -22,23 +22,23 @@ import reactor.core.scheduler.Schedulers;
 @RequiredArgsConstructor
 public class JobRoleAnalysisController {
 
-    private final AnalysisService analysisService;
+    private final AnalysisService analysisSvc;
 
     @PostMapping("/analyze")
     public Mono<ResponseEntity<TriggerAnalysisResponse>> analyze(@PathVariable UUID jobRoleId) {
-        return Mono.fromCallable(() ->
-                        ResponseEntity.status(HttpStatus.ACCEPTED).body(analysisService.triggerAnalysis(jobRoleId)))
+        return Mono.fromCallable(
+                        () -> ResponseEntity.status(HttpStatus.ACCEPTED).body(analysisSvc.triggerAnalysis(jobRoleId)))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
     @GetMapping("/analysis-runs")
     public Mono<List<AnalysisRunResponse>> listRuns(@PathVariable UUID jobRoleId) {
-        return Mono.fromCallable(() -> analysisService.listRuns(jobRoleId)).subscribeOn(Schedulers.boundedElastic());
+        return Mono.fromCallable(() -> analysisSvc.listRuns(jobRoleId)).subscribeOn(Schedulers.boundedElastic());
     }
 
     @GetMapping("/results")
     public Mono<JobRoleResultsResponse> latestResults(@PathVariable UUID jobRoleId) {
-        return Mono.fromCallable(() -> analysisService.latestResultsForJobRole(jobRoleId))
+        return Mono.fromCallable(() -> analysisSvc.latestResultsForJobRole(jobRoleId))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 }
