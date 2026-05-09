@@ -10,15 +10,18 @@ import dev.jbringb.resume_scope.db.generated.tables.records.AnalysisRecord;
 import dev.jbringb.resume_scope.db.generated.tables.records.AnalysisRunRecord;
 import dev.jbringb.resume_scope.repository.AnalysisRepository;
 import dev.jbringb.resume_scope.repository.AnalysisRunRepository;
+import dev.jbringb.resume_scope.repository.AnalysisTriggerIdempotencyRepository;
 import dev.jbringb.resume_scope.repository.CandidateRepository;
 import dev.jbringb.resume_scope.repository.JobRoleRepository;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jooq.JSONB;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
@@ -32,8 +35,11 @@ public class AnalysisService {
     private final AnalysisRepository analysisRepo;
     private final CvAnalyzerService cvAnalyzerSvc;
     private final ObjectMapper objectMapper;
+    private final AnalysisTriggerIdempotencyRepository analysisTriggerIdempotencyRepo;
+    private final AnalysisTriggerIdempotencyLock analysisTriggerIdempotencyLock;
 
-    public TriggerAnalysisResponse triggerAnalysis(UUID jobRoleId) {
+    @Transactional
+    public TriggerAnalysisResponse triggerAnalysis(UUID jobRoleId, Optional<String> idempotencyKeyHeader) {
         log.info("Triggering analysis for job role {}", jobRoleId);
         if (jobRoleRepo.findById(jobRoleId).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Job role not found");
@@ -41,10 +47,43 @@ public class AnalysisService {
         if (candidateRepo.findByJobRoleId(jobRoleId).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No candidates to analyze");
         }
+
+        var key = normalizeIdempotencyKey(idempotencyKeyHeader);
+        if (key.isEmpty()) {
+            return insertRunAndSchedule(jobRoleId);
+        }
+
+        return analysisTriggerIdempotencyLock.withJobRoleKeyLock(jobRoleId, key.get(), () -> {
+            var existing = analysisTriggerIdempotencyRepo.findAnalysisRunId(jobRoleId, key.get());
+            if (existing.isPresent()) {
+                log.info("Idempotent replay for job role {} → run {}", jobRoleId, existing.get());
+                return new TriggerAnalysisResponse(existing.get());
+            }
+            var response = insertRunAndSchedule(jobRoleId);
+            analysisTriggerIdempotencyRepo.insert(jobRoleId, key.get(), response.runId());
+            return response;
+        });
+    }
+
+    private TriggerAnalysisResponse insertRunAndSchedule(UUID jobRoleId) {
         var run = analysisRunRepo.insertPending(jobRoleId);
         log.info("Analysis run inserted: {}", run.getId());
         cvAnalyzerSvc.processAnalysisRunAsync(run.getId());
         return new TriggerAnalysisResponse(run.getId());
+    }
+
+    private static Optional<String> normalizeIdempotencyKey(Optional<String> headerValue) {
+        if (headerValue.isEmpty()) {
+            return Optional.empty();
+        }
+        var trimmed = headerValue.get().trim();
+        if (trimmed.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Idempotency-Key must not be blank");
+        }
+        if (trimmed.length() > 255) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Idempotency-Key too long");
+        }
+        return Optional.of(trimmed);
     }
 
     public List<AnalysisRunResponse> listRuns(UUID jobRoleId) {

@@ -1,0 +1,501 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "ResumeScope API",
+    "version": "0.0.1",
+    "description": "ResumeScope REST API: job roles, CV uploads (PDF), and LLM-backed analysis runs."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8086",
+      "description": "Local"
+    }
+  ],
+  "tags": [
+    { "name": "Job roles", "description": "CRUD for job roles" },
+    { "name": "Candidates", "description": "CVs attached to a job role" },
+    { "name": "Analysis", "description": "Trigger and read analysis runs and scored results" }
+  ],
+  "paths": {
+    "/api/job-roles": {
+      "get": {
+        "tags": ["Job roles"],
+        "summary": "List job roles",
+        "operationId": "listJobRoles",
+        "responses": {
+          "200": {
+            "description": "All job roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/JobRoleResponse" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Job roles"],
+        "summary": "Create job role",
+        "operationId": "createJobRole",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/JobRoleRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created job role",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JobRoleResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/job-roles/{id}": {
+      "get": {
+        "tags": ["Job roles"],
+        "summary": "Get job role by id",
+        "operationId": "getJobRole",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job role",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JobRoleResponse" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "put": {
+        "tags": ["Job roles"],
+        "summary": "Update job role",
+        "operationId": "updateJobRole",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/JobRoleRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated job role",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JobRoleResponse" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "delete": {
+        "tags": ["Job roles"],
+        "summary": "Delete job role",
+        "operationId": "deleteJobRole",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "204": { "description": "Deleted" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/job-roles/{jobRoleId}/candidates": {
+      "get": {
+        "tags": ["Candidates"],
+        "summary": "List candidates for a job role",
+        "operationId": "listCandidates",
+        "parameters": [
+          {
+            "name": "jobRoleId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Candidates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/CandidateResponse" }
+                }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "post": {
+        "tags": ["Candidates"],
+        "summary": "Upload one or more PDF CVs",
+        "description": "Multipart form field `files`: repeated file parts (PDF only).",
+        "operationId": "uploadCandidates",
+        "parameters": [
+          {
+            "name": "jobRoleId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["files"],
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": { "type": "string", "format": "binary" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored candidates (includes newly uploaded)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/CandidateResponse" }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/job-roles/{jobRoleId}/candidates/{candidateId}": {
+      "delete": {
+        "tags": ["Candidates"],
+        "summary": "Delete a candidate",
+        "operationId": "deleteCandidate",
+        "parameters": [
+          {
+            "name": "jobRoleId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "204": { "description": "Deleted" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/job-roles/{jobRoleId}/analyze": {
+      "post": {
+        "tags": ["Analysis"],
+        "summary": "Start analysis for all candidates of this job role",
+        "description": "Returns 202 with a new run id; processing is asynchronous. Optional header Idempotency-Key: replays with the same key for the same job role return the same run id (202) without creating another run or enqueueing duplicate processing; omit the header to always start a new run.",
+        "operationId": "analyzeJobRole",
+        "parameters": [
+          {
+            "name": "jobRoleId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Opaque client token (max 255 chars after trim). Scoped per job role.",
+            "schema": { "type": "string", "maxLength": 255 }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Run accepted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TriggerAnalysisResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/job-roles/{jobRoleId}/analysis-runs": {
+      "get": {
+        "tags": ["Analysis"],
+        "summary": "List analysis runs for a job role",
+        "operationId": "listAnalysisRuns",
+        "parameters": [
+          {
+            "name": "jobRoleId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Runs newest-first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/AnalysisRunResponse" }
+                }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/job-roles/{jobRoleId}/results": {
+      "get": {
+        "tags": ["Analysis"],
+        "summary": "Latest completed results for a job role",
+        "operationId": "latestJobRoleResults",
+        "parameters": [
+          {
+            "name": "jobRoleId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ranked candidate scores for the latest completed run",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JobRoleResultsResponse" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/analysis-runs/{runId}": {
+      "get": {
+        "tags": ["Analysis"],
+        "summary": "Get analysis run by id",
+        "operationId": "getAnalysisRun",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run metadata",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AnalysisRunResponse" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/analysis-runs/{runId}/results": {
+      "get": {
+        "tags": ["Analysis"],
+        "summary": "Results for a specific analysis run",
+        "operationId": "resultsForRun",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ranked candidate scores",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JobRoleResultsResponse" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "JobRoleRequest": {
+        "type": "object",
+        "required": ["title", "description", "requirements"],
+        "properties": {
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "requirements": { "type": "string" }
+        }
+      },
+      "JobRoleResponse": {
+        "type": "object",
+        "required": ["id", "title", "description", "requirements", "createdAt"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "requirements": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "CandidateResponse": {
+        "type": "object",
+        "required": ["id", "jobRoleId", "originalFilename", "createdAt"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "jobRoleId": { "type": "string", "format": "uuid" },
+          "originalFilename": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "AnalysisRunResponse": {
+        "type": "object",
+        "required": ["id", "jobRoleId", "status", "triggeredAt"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "jobRoleId": { "type": "string", "format": "uuid" },
+          "status": { "type": "string", "description": "e.g. PENDING, RUNNING, COMPLETED, FAILED" },
+          "triggeredAt": { "type": "string", "format": "date-time" },
+          "completedAt": { "type": "string", "format": "date-time", "nullable": true },
+          "errorMessage": { "type": "string", "nullable": true }
+        }
+      },
+      "TriggerAnalysisResponse": {
+        "type": "object",
+        "required": ["runId"],
+        "properties": {
+          "runId": { "type": "string", "format": "uuid" }
+        }
+      },
+      "CandidateResultResponse": {
+        "type": "object",
+        "required": [
+          "candidateId",
+          "rank",
+          "overallScore",
+          "extractedName",
+          "extractedEmail",
+          "strengths",
+          "weaknesses",
+          "summary",
+          "recommendation"
+        ],
+        "properties": {
+          "candidateId": { "type": "string", "format": "uuid" },
+          "rank": { "type": "integer" },
+          "overallScore": { "type": "integer" },
+          "extractedName": { "type": "string", "nullable": true },
+          "extractedEmail": { "type": "string", "nullable": true },
+          "strengths": { "type": "array", "items": { "type": "string" } },
+          "weaknesses": { "type": "array", "items": { "type": "string" } },
+          "summary": { "type": "string" },
+          "recommendation": { "type": "string" }
+        }
+      },
+      "JobRoleResultsResponse": {
+        "type": "object",
+        "required": ["jobRoleId", "runId", "runStatus", "results"],
+        "properties": {
+          "jobRoleId": { "type": "string", "format": "uuid" },
+          "runId": { "type": "string", "format": "uuid" },
+          "runStatus": { "type": "string" },
+          "results": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/CandidateResultResponse" }
+          }
+        }
+      },
+      "SpringErrorBody": {
+        "type": "object",
+        "description": "Typical Spring Boot default error JSON (fields may vary by version).",
+        "properties": {
+          "timestamp": { "type": "string", "format": "date-time" },
+          "status": { "type": "integer" },
+          "error": { "type": "string" },
+          "message": { "type": "string" },
+          "path": { "type": "string" }
+        }
+      }
+    },
+    "responses": {
+      "NotFound": {
+        "description": "Resource not found (e.g. unknown id or no completed analysis yet).",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/SpringErrorBody" }
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "Invalid request (e.g. no PDF, no candidates to analyze).",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/SpringErrorBody" }
+          }
+        }
+      }
+    }
+  }
+}

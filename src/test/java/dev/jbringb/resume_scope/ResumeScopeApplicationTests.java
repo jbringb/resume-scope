@@ -2,8 +2,10 @@ package dev.jbringb.resume_scope;
 
 import dev.jbringb.resume_scope.repository.AnalysisRepository;
 import dev.jbringb.resume_scope.repository.AnalysisRunRepository;
+import dev.jbringb.resume_scope.repository.AnalysisTriggerIdempotencyRepository;
 import dev.jbringb.resume_scope.repository.CandidateRepository;
 import dev.jbringb.resume_scope.repository.JobRoleRepository;
+import dev.jbringb.resume_scope.service.AnalysisTriggerIdempotencyLock;
 import dev.jbringb.resume_scope.service.CvAnalyzerService;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -28,6 +30,12 @@ class ResumeScopeApplicationTests {
 
     @MockitoBean
     CvAnalyzerService cvAnalyzerSvc;
+
+    @MockitoBean
+    AnalysisTriggerIdempotencyRepository analysisTriggerIdempotencyRepo;
+
+    @MockitoBean
+    AnalysisTriggerIdempotencyLock analysisTriggerIdempotencyLock;
 
     @Test
     void contextLoads() {}
