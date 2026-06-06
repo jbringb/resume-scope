@@ -1,8 +1,8 @@
 name: Deploy · Render
 
-# Render builds the self-building Dockerfile itself; this workflow is the single
-# deploy trigger (render.yaml sets autoDeploy: false). It fires Render's deploy
-# hook and — if API credentials are provided — waits for the deploy to go live.
+# Render builds the self-building Dockerfile itself; this workflow triggers a
+# deploy via Render's deploy hook (render.yaml sets autoDeploy: false). If API
+# credentials are provided it then waits for the deploy to go live.
 #
 # Required GitHub secret:
 #   RENDER_DEPLOY_HOOK_URL  - the service's Deploy Hook URL (Render dashboard)
@@ -27,29 +27,34 @@ jobs:
     environment: render
     steps:
       - name: Trigger deploy hook
-        id: trigger
         run: |
-          resp=$(curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}")
-          echo "$resp"
-          deploy_id=$(echo "$resp" | jq -r '.deploy.id // .id // empty')
-          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+          # The deploy hook returns 202/"Accepted" with an unstructured body —
+          # don't parse it; a successful POST means the deploy was queued.
+          curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" >/dev/null
+          echo "Render deploy triggered."
 
       - name: Wait for deploy to go live
-        if: steps.trigger.outputs.deploy_id != ''
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
-          DEPLOY_ID: ${{ steps.trigger.outputs.deploy_id }}
         run: |
           if [ -z "$RENDER_API_KEY" ] || [ -z "$SERVICE_ID" ]; then
             echo "RENDER_API_KEY / RENDER_SERVICE_ID not set — skipping wait."
-            echo "Deploy $DEPLOY_ID triggered; track it in the Render dashboard."
+            echo "Track the deploy in the Render dashboard."
             exit 0
           fi
-          echo "Polling deploy $DEPLOY_ID ..."
+          # Give Render a moment to register the new deploy, then take the latest.
+          sleep 5
+          deploy_id=$(curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" \
+            "https://api.render.com/v1/services/$SERVICE_ID/deploys?limit=1" \
+            | jq -r '.[0].deploy.id')
+          if [ -z "$deploy_id" ] || [ "$deploy_id" = "null" ]; then
+            echo "Could not determine deploy id from the Render API ❌"; exit 1
+          fi
+          echo "Polling deploy $deploy_id ..."
           for i in $(seq 1 60); do
             status=$(curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" \
-              "https://api.render.com/v1/services/$SERVICE_ID/deploys/$DEPLOY_ID" \
+              "https://api.render.com/v1/services/$SERVICE_ID/deploys/$deploy_id" \
               | jq -r '.status')
             echo "  [$i] status=$status"
             case "$status" in
