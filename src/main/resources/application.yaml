@@ -17,10 +17,14 @@ spring:
 
   ai:
     openai:
-      api-key: ${OPENAI_API_KEY:change-me}
+      api-key:  ${OPENAI_API_KEY:change-me}
+      # Defaults to OpenAI; override base-url + model to use any OpenAI-compatible
+      # provider (e.g. Groq, OpenRouter, a local vLLM). base-url is the host only —
+      # Spring AI appends /v1/chat/completions, so do not include /v1.
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
       chat:
         options:
-          model:       gpt-4o-mini
+          model:       ${OPENAI_MODEL:gpt-4o-mini}
           temperature: 0.0
 
   codec:

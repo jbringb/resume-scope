@@ -154,7 +154,9 @@ All config lives in `src/main/resources/application.yaml`. Key environment varia
 
 | Variable         | Description                     | Default         |
 |------------------|---------------------------------|-----------------|
-| `OPENAI_API_KEY` | API key (OpenAI or dummy for local) | `change-me` in `application.yaml`; `local-dummy` in `local-vllm` profile |
+| `OPENAI_API_KEY` | API key (OpenAI or any OpenAI-compatible provider) | `change-me` in `application.yaml`; `local-dummy` in `local-vllm` profile |
+| `OPENAI_BASE_URL`| Provider host (no `/v1` — Spring AI appends it). Override to use Groq / OpenRouter / vLLM. | `https://api.openai.com` |
+| `OPENAI_MODEL`   | Chat model id | `gpt-4o-mini` |
 | `API_KEY`        | Shared secret required on `/api/**` (sent as the `X-API-Key` header). Empty = auth disabled. | empty (open) |
 
 ### API authentication
@@ -166,7 +168,7 @@ When `API_KEY` is set, every `/api/**` request must include a matching `X-API-Ke
 curl -H "X-API-Key: $API_KEY" https://<host>/api/job-roles
 ```
 
-To switch AI providers, replace `spring-ai-starter-model-openai` in `build.gradle` with the desired provider starter (e.g. `spring-ai-starter-model-anthropic`) and update the `spring.ai.*` config block. Application code should use Spring AI’s provider-agnostic `ChatClient` API.
+For any **OpenAI-compatible** provider (Groq, OpenRouter, Together, a local vLLM, …) no code change is needed — set `OPENAI_BASE_URL`, `OPENAI_MODEL`, and `OPENAI_API_KEY`. To switch to a **non-compatible** provider, replace `spring-ai-starter-model-openai` in `build.gradle` with that provider's starter (e.g. `spring-ai-starter-model-anthropic`) and update the `spring.ai.*` config block. Application code uses Spring AI’s provider-agnostic `ChatClient` API.
 
 ### Local inference (vLLM)
 
