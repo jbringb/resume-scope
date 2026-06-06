@@ -155,6 +155,16 @@ All config lives in `src/main/resources/application.yaml`. Key environment varia
 | Variable         | Description                     | Default         |
 |------------------|---------------------------------|-----------------|
 | `OPENAI_API_KEY` | API key (OpenAI or dummy for local) | `change-me` in `application.yaml`; `local-dummy` in `local-vllm` profile |
+| `API_KEY`        | Shared secret required on `/api/**` (sent as the `X-API-Key` header). Empty = auth disabled. | empty (open) |
+
+### API authentication
+
+When `API_KEY` is set, every `/api/**` request must include a matching `X-API-Key` header, otherwise it returns `401`. The `/health` endpoint stays open for platform health checks. Leave `API_KEY` unset for local development.
+
+```bash
+# With auth enabled:
+curl -H "X-API-Key: $API_KEY" https://<host>/api/job-roles
+```
 
 To switch AI providers, replace `spring-ai-starter-model-openai` in `build.gradle` with the desired provider starter (e.g. `spring-ai-starter-model-anthropic`) and update the `spring.ai.*` config block. Application code should use Spring AI’s provider-agnostic `ChatClient` API.
 

@@ -13,7 +13,7 @@ services:
     region: oregon
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    healthCheckPath: /api/job-roles
+    healthCheckPath: /health
     # Deploys are driven by the GitHub Actions workflow (deploy-render.yml) via
     # a deploy hook, not by Render's git auto-deploy.
     autoDeploy: false
@@ -41,4 +41,8 @@ services:
           name: resume-scope-db
           property: password
       - key: OPENAI_API_KEY
+        sync: false
+      # Shared API key required on /api/** (X-API-Key header). Set this in the
+      # Render dashboard; clients must send the same value.
+      - key: API_KEY
         sync: false

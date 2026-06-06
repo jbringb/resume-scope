@@ -29,6 +29,11 @@ spring:
 server:
   port: ${PORT:8086}
 
+security:
+  # Shared API key required on /api/** (sent as the X-API-Key header).
+  # Empty = auth disabled (local/dev). Set API_KEY in deployed environments.
+  api-key: ${API_KEY:}
+
 logging:
   charset:
     console: UTF-8

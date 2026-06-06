@@ -9,7 +9,9 @@ The [Dockerfile](../../Dockerfile) is **self-building** — Render compiles the 
 ## One-time setup
 
 1. **Create the Blueprint.** Push this repo to GitHub, then in the [Render Dashboard](https://dashboard.render.com/) choose **New → Blueprint**, connect the repo, and select `render.yaml`. Confirm the resources (web service + free Postgres) and **Apply**.
-2. **Set the OpenAI key.** During the first deploy Render prompts for `OPENAI_API_KEY` (marked `sync: false` in the blueprint). Paste your key.
+2. **Set the secrets.** During the first deploy Render prompts for the `sync: false` vars:
+   - `OPENAI_API_KEY` — your OpenAI key.
+   - `API_KEY` — a shared secret that clients must send as the `X-API-Key` header on every `/api/**` request. Pick a long random value. Leave it unset only if you intend the API to be public. (The health check at `/health` is always open, so leaving `API_KEY` set does not affect Render's health checks.)
 3. **Wire the deploy hook into GitHub.** On the web service: **Settings → Deploy Hook**, copy the URL, and add it as a GitHub repository secret named **`RENDER_DEPLOY_HOOK_URL`** (Settings → Secrets and variables → Actions). Recommended: create a GitHub **Environment** named `render` and scope the secret to it.
 4. **(Optional) Real pass/fail feedback.** To make the workflow *wait* for the deploy to go live, also add:
    - **`RENDER_API_KEY`** — Account Settings → API Keys.

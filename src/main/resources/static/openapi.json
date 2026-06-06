@@ -378,7 +378,16 @@
       }
     }
   },
+  "security": [{ "ApiKeyAuth": [] }],
   "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Shared API key for all /api/** endpoints. Required when the server has API_KEY set (deployed environments); disabled when unset (local/dev)."
+      }
+    },
     "schemas": {
       "JobRoleRequest": {
         "type": "object",

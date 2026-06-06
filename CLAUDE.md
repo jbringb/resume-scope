@@ -73,7 +73,7 @@ OPENAI_API_KEY=sk-... ./gradlew bootRun        # run the app on :8086
 docker compose up --build                      # full stack (Postgres + app) — image builds itself
 ```
 
-- App port **8086**; health/sanity check: `GET /api/job-roles`.
+- App port **8086**; health check: `GET /health` (open). `GET /api/job-roles` is a sanity check but requires `X-API-Key` when `API_KEY` is set.
 - Local LLM (no OpenAI key): start a vLLM server on `:8000`, then `SPRING_PROFILES_ACTIVE=local-vllm ./gradlew bootRun`.
 - **jOOQ code is committed**, and `generateSchemaSourceOnCompilation = false` — so plain `./gradlew test`/`build` does **not** need a database.
 - The [`Dockerfile`](Dockerfile) is a **self-building multi-stage** image: it compiles the boot jar from source inside Docker (no host `bootJar` needed) and extracts Spring Boot layers via the `tools` jarmode. This is what all deployment targets build.
@@ -84,6 +84,7 @@ docker compose up --build                      # full stack (Postgres + app) —
 - **App runtime DB env:** `SPRING_DATASOURCE_URL` or `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD`.
 - **Gradle Flyway/jOOQ tasks** use separate vars: `DB_URL`/`DB_USER`/`DB_PASSWORD` (or `-Pdb.url=` etc.), default `jdbc:postgresql://localhost:5432/resumescope`.
 - **AI:** `OPENAI_API_KEY` (required at runtime), optional `OPENAI_BASE_URL`, `OPENAI_MODEL`.
+- **Auth:** `API_KEY` gates `/api/**` via the `X-API-Key` header (`ApiKeyAuthFilter`, a reactive `WebFilter`). Empty = disabled (local/dev). `/health` is always open and is the platform health-check path. Update `openapi.json` (`ApiKeyAuth` scheme) if the auth contract changes.
 - **Server:** `PORT` (default 8086).
 
 ## Key files
