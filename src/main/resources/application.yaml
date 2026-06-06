@@ -26,6 +26,13 @@ spring:
   codec:
     max-in-memory-size: 50MB
 
+  # Applies to the auto-configured RestClient that Spring AI uses for OpenAI calls,
+  # so a hung/slow LLM request fails fast instead of blocking the analysis worker.
+  http:
+    client:
+      connect-timeout: 10s
+      read-timeout: 60s
+
 server:
   port: ${PORT:8086}
 
@@ -33,6 +40,11 @@ security:
   # Shared API key required on /api/** (sent as the X-API-Key header).
   # Empty = auth disabled (local/dev). Set API_KEY in deployed environments.
   api-key: ${API_KEY:}
+
+analysis:
+  # A run is considered expired this many minutes after it is triggered; an expired
+  # PENDING/RUNNING run is failed lazily on access and its idempotency key starts a new run.
+  run-timeout-minutes: ${ANALYSIS_RUN_TIMEOUT_MINUTES:10}
 
 logging:
   charset:

@@ -3,6 +3,8 @@ package dev.jbringb.resume_scope.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -18,6 +20,7 @@ import dev.jbringb.resume_scope.repository.AnalysisRunRepository;
 import dev.jbringb.resume_scope.repository.AnalysisTriggerIdempotencyRepository;
 import dev.jbringb.resume_scope.repository.CandidateRepository;
 import dev.jbringb.resume_scope.repository.JobRoleRepository;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -146,7 +149,11 @@ class AnalysisServiceTest {
 
         var run = new AnalysisRunRecord();
         run.setId(runId);
+        run.setStatus("PENDING");
+        run.setTriggeredAt(OffsetDateTime.now());
         when(analysisRunRepo.insertPending(jobRoleId)).thenReturn(run);
+        // Replay only happens while the existing run is still active (recent, non-terminal).
+        when(analysisRunRepo.findById(runId)).thenReturn(Optional.of(run));
 
         var first = analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key));
         var second = analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key));
@@ -156,6 +163,51 @@ class AnalysisServiceTest {
         verify(analysisRunRepo, times(1)).insertPending(jobRoleId);
         verify(cvAnalyzerSvc, times(1)).processAnalysisRunAsync(runId);
         verify(analysisTriggerIdempotencyRepo).insert(jobRoleId, key, runId);
+    }
+
+    @Test
+    void triggerAnalysis_whenExistingRunExpired_startsNewRunAndRepoints() {
+        var jobRoleId = UUID.randomUUID();
+        var oldRunId = UUID.randomUUID();
+        var newRunId = UUID.randomUUID();
+        var key = "idem-expired";
+        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Optional.of(new JobRoleRecord()));
+        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(List.of(new CandidateRecord()));
+        when(analysisTriggerIdempotencyRepo.findAnalysisRunId(jobRoleId, key)).thenReturn(Optional.of(oldRunId));
+
+        var staleRun = new AnalysisRunRecord();
+        staleRun.setId(oldRunId);
+        staleRun.setStatus("PENDING");
+        staleRun.setTriggeredAt(OffsetDateTime.now().minusMinutes(20));
+        when(analysisRunRepo.findById(oldRunId)).thenReturn(Optional.of(staleRun));
+
+        var newRun = new AnalysisRunRecord();
+        newRun.setId(newRunId);
+        when(analysisRunRepo.insertPending(jobRoleId)).thenReturn(newRun);
+
+        var response = analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key));
+
+        assertThat(response.runId()).isEqualTo(newRunId);
+        verify(analysisRunRepo).updateStatus(eq(oldRunId), eq("FAILED"), any(OffsetDateTime.class), anyString());
+        verify(analysisTriggerIdempotencyRepo).repoint(jobRoleId, key, newRunId);
+        verify(cvAnalyzerSvc).processAnalysisRunAsync(newRunId);
+        verify(analysisTriggerIdempotencyRepo, never()).insert(any(), any(), any());
+    }
+
+    @Test
+    void getRun_whenStale_marksFailed() {
+        var runId = UUID.randomUUID();
+        var staleRun = new AnalysisRunRecord();
+        staleRun.setId(runId);
+        staleRun.setJobRoleId(UUID.randomUUID());
+        staleRun.setStatus("PENDING");
+        staleRun.setTriggeredAt(OffsetDateTime.now().minusMinutes(20));
+        when(analysisRunRepo.findById(runId)).thenReturn(Optional.of(staleRun));
+
+        var response = analysisSvc.getRun(runId);
+
+        assertThat(response.status()).isEqualTo("FAILED");
+        verify(analysisRunRepo).updateStatus(eq(runId), eq("FAILED"), any(OffsetDateTime.class), anyString());
     }
 
     @Test

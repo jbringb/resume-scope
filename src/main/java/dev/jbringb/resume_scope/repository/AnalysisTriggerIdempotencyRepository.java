@@ -35,4 +35,12 @@ public class AnalysisTriggerIdempotencyRepository {
                 .values(jobRoleId, idempotencyKey, analysisRunId)
                 .execute();
     }
+
+    /** Repoints an existing key to a new run (used when the previous run has expired). */
+    public void repoint(UUID jobRoleId, String idempotencyKey, UUID analysisRunId) {
+        dsl.update(ANALYSIS_TRIGGER_IDEMPOTENCY)
+                .set(ANALYSIS_RUN_ID, analysisRunId)
+                .where(JOB_ROLE_ID.eq(jobRoleId).and(IDEMPOTENCY_KEY.eq(idempotencyKey)))
+                .execute();
+    }
 }

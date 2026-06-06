@@ -13,15 +13,20 @@ import dev.jbringb.resume_scope.repository.AnalysisRunRepository;
 import dev.jbringb.resume_scope.repository.AnalysisTriggerIdempotencyRepository;
 import dev.jbringb.resume_scope.repository.CandidateRepository;
 import dev.jbringb.resume_scope.repository.JobRoleRepository;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jooq.JSONB;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
@@ -37,6 +42,13 @@ public class AnalysisService {
     private final ObjectMapper objectMapper;
     private final AnalysisTriggerIdempotencyRepository analysisTriggerIdempotencyRepo;
     private final AnalysisTriggerIdempotencyLock analysisTriggerIdempotencyLock;
+
+    private static final Set<String> TERMINAL_STATUSES = Set.of("COMPLETED", "FAILED");
+    private static final String EXPIRED_MESSAGE = "Expired: no result within the allowed time";
+
+    // A run is considered expired this many minutes after it was triggered (see expireIfStale).
+    @Value("${analysis.run-timeout-minutes:10}")
+    private int runTimeoutMinutes = 10;
 
     @Transactional
     public TriggerAnalysisResponse triggerAnalysis(UUID jobRoleId, Optional<String> idempotencyKeyHeader) {
@@ -56,8 +68,19 @@ public class AnalysisService {
         return analysisTriggerIdempotencyLock.withJobRoleKeyLock(jobRoleId, key.get(), () -> {
             var existing = analysisTriggerIdempotencyRepo.findAnalysisRunId(jobRoleId, key.get());
             if (existing.isPresent()) {
-                log.info("Idempotent replay for job role {} → run {}", jobRoleId, existing.get());
-                return new TriggerAnalysisResponse(existing.get());
+                var existingRun = analysisRunRepo.findById(existing.get()).orElse(null);
+                if (existingRun != null && isActive(existingRun)) {
+                    log.info("Idempotent replay for job role {} → run {}", jobRoleId, existing.get());
+                    return new TriggerAnalysisResponse(existing.get());
+                }
+                // Previous run is done/failed/expired: fail it if still stuck, then start fresh.
+                if (existingRun != null) {
+                    expireIfStale(existingRun);
+                }
+                var fresh = insertRunAndSchedule(jobRoleId);
+                analysisTriggerIdempotencyRepo.repoint(jobRoleId, key.get(), fresh.runId());
+                log.info("Idempotency key expired for job role {} → new run {}", jobRoleId, fresh.runId());
+                return fresh;
             }
             var response = insertRunAndSchedule(jobRoleId);
             analysisTriggerIdempotencyRepo.insert(jobRoleId, key.get(), response.runId());
@@ -65,11 +88,49 @@ public class AnalysisService {
         });
     }
 
+    private boolean isActive(AnalysisRunRecord run) {
+        return !TERMINAL_STATUSES.contains(run.getStatus()) && !isExpired(run);
+    }
+
+    private boolean isExpired(AnalysisRunRecord run) {
+        var triggeredAt = run.getTriggeredAt();
+        return triggeredAt == null || triggeredAt.isBefore(OffsetDateTime.now().minusMinutes(runTimeoutMinutes));
+    }
+
+    // Lazily fail a non-terminal run that has outlived its TTL, so it stops showing PENDING/RUNNING.
+    private AnalysisRunRecord expireIfStale(AnalysisRunRecord run) {
+        if (!TERMINAL_STATUSES.contains(run.getStatus()) && isExpired(run)) {
+            var now = OffsetDateTime.now();
+            analysisRunRepo.updateStatus(run.getId(), "FAILED", now, EXPIRED_MESSAGE);
+            run.setStatus("FAILED");
+            run.setCompletedAt(now);
+            run.setErrorMessage(EXPIRED_MESSAGE);
+        }
+        return run;
+    }
+
     private TriggerAnalysisResponse insertRunAndSchedule(UUID jobRoleId) {
         var run = analysisRunRepo.insertPending(jobRoleId);
-        log.info("Analysis run inserted: {}", run.getId());
-        cvAnalyzerSvc.processAnalysisRunAsync(run.getId());
-        return new TriggerAnalysisResponse(run.getId());
+        var runId = run.getId();
+        log.info("Analysis run inserted: {}", runId);
+        scheduleProcessingAfterCommit(runId);
+        return new TriggerAnalysisResponse(runId);
+    }
+
+    // The @Async worker uses a separate DB connection; dispatch it only after this
+    // transaction commits, otherwise it may not see the freshly-inserted run and
+    // would leave it stuck in PENDING.
+    private void scheduleProcessingAfterCommit(UUID runId) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    cvAnalyzerSvc.processAnalysisRunAsync(runId);
+                }
+            });
+        } else {
+            cvAnalyzerSvc.processAnalysisRunAsync(runId);
+        }
     }
 
     private static Optional<String> normalizeIdempotencyKey(Optional<String> headerValue) {
@@ -91,6 +152,7 @@ public class AnalysisService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Job role not found");
         }
         return analysisRunRepo.findByJobRoleIdOrderByTriggeredDesc(jobRoleId).stream()
+                .map(this::expireIfStale)
                 .map(this::toRunDto)
                 .toList();
     }
@@ -108,6 +170,7 @@ public class AnalysisService {
     public AnalysisRunResponse getRun(UUID runId) {
         return analysisRunRepo
                 .findById(runId)
+                .map(this::expireIfStale)
                 .map(this::toRunDto)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Analysis run not found"));
     }
@@ -115,6 +178,7 @@ public class AnalysisService {
     public JobRoleResultsResponse resultsForRun(UUID runId) {
         var run = analysisRunRepo
                 .findById(runId)
+                .map(this::expireIfStale)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Analysis run not found"));
         return mapRunResults(run.getJobRoleId(), run);
     }

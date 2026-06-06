@@ -239,7 +239,7 @@
       "post": {
         "tags": ["Analysis"],
         "summary": "Start analysis for all candidates of this job role",
-        "description": "Returns 202 with a new run id; processing is asynchronous. Optional header Idempotency-Key: replays with the same key for the same job role return the same run id (202) without creating another run or enqueueing duplicate processing; omit the header to always start a new run.",
+        "description": "Returns 202 with a new run id; processing is asynchronous. Optional header Idempotency-Key: while the keyed run is still active (in progress, within the ~10 min run timeout) a replay returns the same run id without enqueueing duplicate processing. Once that run has completed, failed, or expired, the same key starts a fresh run. Omit the header to always start a new run.",
         "operationId": "analyzeJobRole",
         "parameters": [
           {

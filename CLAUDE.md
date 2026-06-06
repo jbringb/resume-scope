@@ -28,7 +28,7 @@ Root package `dev.jbringb.resume_scope`:
 - `pdf/` — `PdfTextExtractor` (PDFBox → text)
 - `db/generated/` — **jOOQ-generated code, committed to source. Never hand-edit; regenerate instead.**
 
-**Async analysis flow:** `AnalysisService.triggerAnalysis` is idempotent (optional `Idempotency-Key` header, Postgres-backed lock) and returns **202 + runId** → `@Async CvAnalyzerService.processAnalysisRunAsync(runId)` calls the LLM per candidate, clamps scores to 0–100, inserts results, **ranks 1..N by score desc**, sets run status `COMPLETED`/`FAILED`, and publishes to `AnalysisEventBus`. Admin polls `GET /api/analysis-runs/{runId}`.
+**Async analysis flow:** `AnalysisService.triggerAnalysis` is idempotent (optional `Idempotency-Key` header, Postgres-backed lock) and returns **202 + runId** → `@Async CvAnalyzerService.processAnalysisRunAsync(runId)` calls the LLM per candidate, clamps scores to 0–100, inserts results, **ranks 1..N by score desc**, sets run status `COMPLETED`/`FAILED`, and publishes to `AnalysisEventBus`. Admin polls `GET /api/analysis-runs/{runId}`. The async worker is dispatched **after** the trigger transaction commits (so it can see the run). Runs have a **timeout** (`analysis.run-timeout-minutes`, default 10): a `PENDING`/`RUNNING` run older than that is lazily marked `FAILED` on next access, and an expired idempotency key starts a fresh run. The LLM call inherits `spring.http.client.read-timeout`.
 
 ## Conventions (observed in code — follow them)
 

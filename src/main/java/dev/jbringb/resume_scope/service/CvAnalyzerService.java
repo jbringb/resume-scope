@@ -38,16 +38,18 @@ public class CvAnalyzerService {
         try {
             var run = analysisRunRepo.findById(runId).orElse(null);
             if (run == null) {
+                log.warn("Analysis run {} not found — skipping (trigger transaction not committed?)", runId);
                 return;
             }
             log.info("Processing analysis run {}", runId);
             var jobRoleId = run.getJobRoleId();
-            log.info("Job role: {}", jobRoleId);
             var role = jobRoleRepo.findById(jobRoleId).orElse(null);
             if (role == null) {
                 failRun(runId, "Job role not found");
                 return;
             }
+            analysisRunRepo.updateStatusOnly(runId, "RUNNING");
+            publishRun(runId);
             var candidates = candidateRepo.findByJobRoleId(jobRoleId);
             for (var candidate : candidates) {
                 var cvText = candidate.getCvText() == null ? "" : candidate.getCvText();
