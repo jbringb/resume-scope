@@ -19,8 +19,7 @@ The [Dockerfile](../../Dockerfile) is **self-building** — Render compiles the 
 
 ## Deploying
 
-- **Automatic:** push to `main` → `deploy-render.yml` fires the deploy hook.
-- **Manual:** Actions → **Deploy · Render** → **Run workflow**.
+Deploys are **manual only**: Actions → **Deploy · Render** → **Run workflow**. (The workflow is `workflow_dispatch`-only — pushes to `main` do not deploy.)
 
 After it goes live, open the web service URL and try `GET /api/job-roles` (an empty list `[]` means healthy).
 

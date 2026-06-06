@@ -11,8 +11,6 @@ name: Deploy · Render
 #   RENDER_SERVICE_ID       - the web service id (srv-...)
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
