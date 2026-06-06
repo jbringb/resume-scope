@@ -1,8 +1,0 @@
-# Used by `gcloud builds submit` from the repository root (see deploy/cloudrun/README.md).
-# Git ignores build/; we must include the boot JAR for Docker.
-.git
-.gradle
-.idea
-build/
-!build/libs/
-!build/libs/resume-scope.jar

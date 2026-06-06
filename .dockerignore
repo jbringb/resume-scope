@@ -1,7 +1,17 @@
-# Ignore everything by default, then explicitly include what Docker needs
-*
-
-# Include the pre-built JAR only
-!build/
-!build/libs/
-!build/libs/*.jar
+# Build context for the self-building multi-stage Dockerfile.
+# The image compiles the boot jar from source, so keep src/, gradle/, gradlew,
+# build.gradle and settings.gradle — exclude everything else.
+.git
+.github
+.gradle
+.idea
+.vscode
+build/
+deploy/
+bin/
+*.md
+.env
+.env.*
+docker-compose.yml
+Dockerfile
+.dockerignore

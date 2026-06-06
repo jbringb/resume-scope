@@ -70,11 +70,13 @@ OPENAI_API_KEY=sk-... ./gradlew bootRun        # run the app on :8086
 ./gradlew test                                 # unit tests (JUnit 5 + Mockito)
 ./gradlew check                                # spotlessCheck + tests
 ./gradlew bootJar                              # build build/libs/resume-scope.jar
+docker compose up --build                      # full stack (Postgres + app) — image builds itself
 ```
 
 - App port **8086**; health/sanity check: `GET /api/job-roles`.
 - Local LLM (no OpenAI key): start a vLLM server on `:8000`, then `SPRING_PROFILES_ACTIVE=local-vllm ./gradlew bootRun`.
 - **jOOQ code is committed**, and `generateSchemaSourceOnCompilation = false` — so plain `./gradlew test`/`build` does **not** need a database.
+- The [`Dockerfile`](Dockerfile) is a **self-building multi-stage** image: it compiles the boot jar from source inside Docker (no host `bootJar` needed) and extracts Spring Boot layers via the `tools` jarmode. This is what all deployment targets build.
 
 ## Config & environment
 

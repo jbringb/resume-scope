@@ -1,0 +1,250 @@
+# ResumeScope
+
+[![CI](https://github.com/jbringb/resume-scope/actions/workflows/ci.yml/badge.svg)](https://github.com/jbringb/resume-scope/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/jbringb/resume-scope/actions/workflows/codeql.yml/badge.svg)](https://github.com/jbringb/resume-scope/actions/workflows/codeql.yml)
+![Java 25](https://img.shields.io/badge/Java-25-orange)
+![Spring Boot 4](https://img.shields.io/badge/Spring%20Boot-4.0-brightgreen)
+
+AI-powered CV analysis platform built with **Spring Boot 4**, **Spring AI**, **jOOQ**, and **PostgreSQL**.
+
+Administrators upload PDF CVs connected to job roles. The AI analyses each CV, ranks candidates, and highlights strengths and weaknesses against the role requirements.
+
+The analysis runs **asynchronously**: triggering an analysis returns `202 Accepted` with a run ID, a background worker scores every candidate against the role via the LLM, candidates are ranked by descending score, and the client polls the run for results.
+
+---
+
+## Tech Stack
+
+| Layer        | Technology                                |
+|--------------|-------------------------------------------|
+| Backend      | Spring Boot 4.0.4 · WebFlux · Java 25    |
+| AI           | Spring AI 2.0 · OpenAI-compatible (hosted or local vLLM) |
+| Database     | PostgreSQL 17 · jOOQ 3.19 · Flyway 11   |
+| PDF parsing  | Apache PDFBox 3.0.7                       |
+| Frontend     | Angular (separate — not yet built)        |
+
+---
+
+## Deployments
+
+The [Dockerfile](Dockerfile) is **self-building** (it compiles the boot jar from source inside the image — no local build step). See:
+
+- [Render.com](deploy/render/README.md) — Blueprint [`render.yaml`](render.yaml) (Docker web service + Postgres), deployed via GitHub Actions
+
+---
+
+## Prerequisites
+
+- Docker Desktop
+- Java 25+ (`JAVA_HOME` pointing to JDK 25; Docker image uses `eclipse-temurin:25-jre-alpine`)
+- Either an **OpenAI API key** (`OPENAI_API_KEY`) for hosted inference, **or** a local [vLLM](https://docs.vllm.ai/) server with an OpenAI-compatible API (see [Local inference (vLLM)](#local-inference-vllm)).
+
+---
+
+## First-time Setup
+
+### 1. Start the database
+
+Copy [`.env.example`](.env.example) to `.env` if you have not already (needed when you run the full stack with Docker; see [Docker Compose](#docker-compose-and-spring_profiles_active)).
+
+```bash
+docker compose up -d postgres
+```
+
+### 2. Apply Flyway migrations
+
+```bash
+./gradlew flywayMigrate
+```
+
+This runs the migration scripts in `src/main/resources/db/migration/` (`V1`–`V5`) against the local database.
+
+### 3. Generate jOOQ classes
+
+```bash
+./gradlew generateJooq
+```
+
+jOOQ reads the live schema and generates type-safe classes into `src/main/java/dev/jbringb/resume_scope/db/generated/`. **These sources are committed to the repository** (codegen does not run on every compile — `generateSchemaSourceOnCompilation = false`), so a plain `./gradlew build` / `test` needs **no database**. Only re-run `generateJooq` after a schema change, and commit the regenerated files. Never hand-edit them.
+
+### 4. Run the application
+
+```bash
+OPENAI_API_KEY=sk-... ./gradlew bootRun
+```
+
+The API is available at `http://localhost:8086`.
+
+---
+
+## API Reference
+
+### Job Roles
+
+| Method | Path                           | Description           |
+|--------|--------------------------------|-----------------------|
+| GET    | `/api/job-roles`               | List all job roles    |
+| POST   | `/api/job-roles`               | Create a job role     |
+| GET    | `/api/job-roles/{id}`          | Get a job role        |
+| PUT    | `/api/job-roles/{id}`          | Update a job role     |
+| DELETE | `/api/job-roles/{id}`          | Delete a job role     |
+
+**Create job role body:**
+```json
+{
+  "title": "Senior Backend Engineer",
+  "description": "We are looking for...",
+  "requirements": "5+ years Java, Spring Boot, PostgreSQL..."
+}
+```
+
+### Candidates (CV Upload)
+
+| Method | Path                                          | Description                       |
+|--------|-----------------------------------------------|-----------------------------------|
+| GET    | `/api/job-roles/{id}/candidates`              | List candidates for a role        |
+| POST   | `/api/job-roles/{id}/candidates`              | Upload PDF CVs (multipart/form-data, field: `files`) |
+| DELETE | `/api/job-roles/{id}/candidates/{cId}`        | Remove a candidate                |
+
+**Upload example (curl):**
+```bash
+curl -X POST http://localhost:8086/api/job-roles/{id}/candidates \
+  -F "files=@alice.pdf" \
+  -F "files=@bob.pdf"
+```
+
+### Analysis
+
+| Method | Path                                        | Description                                           |
+|--------|---------------------------------------------|-------------------------------------------------------|
+| POST   | `/api/job-roles/{id}/analyze`               | Trigger AI analysis (returns 202 + run ID)            |
+| GET    | `/api/job-roles/{id}/analysis-runs`         | List all analysis runs for a role                     |
+| GET    | `/api/job-roles/{id}/results`               | Get ranked results from latest completed run          |
+| GET    | `/api/analysis-runs/{runId}`                | Poll status of a specific run                         |
+| GET    | `/api/analysis-runs/{runId}/results`        | Get all results for a specific run                    |
+
+**Analysis run status values:** `PENDING` → `RUNNING` → `COMPLETED` | `FAILED`
+
+**Results response example:**
+```json
+{
+  "jobRoleId": "...",
+  "runId": "...",
+  "runStatus": "COMPLETED",
+  "results": [
+    {
+      "rank": 1,
+      "overallScore": 87,
+      "extractedName": "Alice Smith",
+      "extractedEmail": "alice@example.com",
+      "strengths": ["Strong Java background", "Relevant Spring experience", "..."],
+      "weaknesses": ["No Kubernetes exposure", "..."],
+      "summary": "Alice is a strong candidate with 7 years of Java development...",
+      "recommendation": "Strong fit — recommend for interview"
+    }
+  ]
+}
+```
+
+---
+
+## Configuration
+
+All config lives in `src/main/resources/application.yaml`. Key environment variables:
+
+| Variable         | Description                     | Default         |
+|------------------|---------------------------------|-----------------|
+| `OPENAI_API_KEY` | API key (OpenAI or dummy for local) | `change-me` in `application.yaml`; `local-dummy` in `local-vllm` profile |
+
+To switch AI providers, replace `spring-ai-starter-model-openai` in `build.gradle` with the desired provider starter (e.g. `spring-ai-starter-model-anthropic`) and update the `spring.ai.*` config block. Application code should use Spring AI’s provider-agnostic `ChatClient` API.
+
+### Local inference (vLLM)
+
+Use the `local-vllm` Spring profile to send chat completions to a **local OpenAI-compatible** server ([vLLM](https://docs.vllm.ai/)) instead of the public OpenAI API. Defaults in [`application-local-vllm.yaml`](src/main/resources/application-local-vllm.yaml) use **`http://localhost:8000`** as the API host (Spring AI adds **`/v1/chat/completions`**; do not put `/v1` in `base-url` or you get **`/v1/v1/...`**). Default model **`Qwen/Qwen3-4B-Instruct-2507`**.
+
+1. Complete [First-time Setup](#first-time-setup) (PostgreSQL, Flyway, jOOQ) as usual.
+2. Start vLLM (GPU). Example (PowerShell — set `cachePath` to your Hugging Face cache dir):
+
+   ```powershell
+   docker run `
+     --gpus all `
+     --rm `
+     -it `
+     -p 8000:8000 `
+     -v "${cachePath}:/root/.cache/huggingface" `
+     vllm/vllm-openai:latest `
+     --model "Qwen/Qwen3-4B-Instruct-2507" `
+     --gpu-memory-utilization 0.85 `
+     --max-model-len 8192
+   ```
+
+   vLLM serves the OpenAI-compatible API at **`http://localhost:8000/v1/...`** on the host; set **`OPENAI_BASE_URL=http://localhost:8000`** for Spring AI (see [vLLM OpenAI-compatible server](https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html)).
+
+3. Run the app with the profile active:
+
+   **Linux / macOS:**
+   ```bash
+   SPRING_PROFILES_ACTIVE=local-vllm ./gradlew bootRun
+   ```
+
+   **Windows (PowerShell):**
+   ```powershell
+   $env:SPRING_PROFILES_ACTIVE = "local-vllm"
+   .\gradlew.bat bootRun
+   ```
+
+4. Optional environment overrides (see [`application-local-vllm.yaml`](src/main/resources/application-local-vllm.yaml)):
+
+   | Variable           | Description |
+   |--------------------|-------------|
+   | `OPENAI_BASE_URL`  | API host only, e.g. `http://localhost:8000` (no `/v1`; Spring AI adds the path) |
+   | `OPENAI_MODEL`     | Model id **exactly** as passed to vLLM `--model` |
+   | `OPENAI_API_KEY`   | Dummy is fine locally (`local-dummy` in profile) |
+
+**Tip:** `--max-model-len 8192` is enforced by vLLM; keep prompts + expected completion within that budget.
+
+### Docker Compose and `SPRING_PROFILES_ACTIVE`
+
+1. Copy [`.env.example`](.env.example) to **`.env`** in the project root (Compose requires this file because the `app` service uses `env_file: .env`).
+2. Edit `.env`: set `OPENAI_API_KEY`, and optionally `SPRING_PROFILES_ACTIVE=local-vllm` plus `OPENAI_BASE_URL` / `OPENAI_MODEL` for local vLLM (see comments in `.env.example`).
+3. Build the JAR, then start Compose:
+
+```bash
+./gradlew bootJar
+docker compose up --build
+```
+
+**Local vLLM on the host:** Inside the container, `localhost` is not your machine. Set **`OPENAI_BASE_URL=http://host.docker.internal:8000`** (still no `/v1`). Compose already adds `extra_hosts: host.docker.internal:host-gateway` for Linux; Docker Desktop provides `host.docker.internal` by default.
+
+---
+
+## Development workflow (after first-time setup)
+
+```bash
+# Start DB (if not running)
+docker compose up -d postgres
+
+# Run the app
+OPENAI_API_KEY=sk-... ./gradlew bootRun
+
+# Re-run migrations + regenerate jOOQ after schema changes
+./gradlew flywayMigrate generateJooq
+```
+
+---
+
+## Testing & Code Quality
+
+```bash
+./gradlew test          # unit tests (JUnit 5 + Mockito + AssertJ) — no database required
+./gradlew spotlessApply # auto-format (Palantir Java Format, 120 columns)
+./gradlew check         # spotlessCheck + tests
+```
+
+Code is formatted with [Spotless](https://github.com/diffplug/spotless) using Palantir Java Format; the jOOQ-generated `db/generated/**` package is excluded (regenerate it instead of formatting). Run `./gradlew spotlessApply` before committing — CI enforces `spotlessCheck`.
+
+Every push and pull request runs the [**CI** workflow](.github/workflows/ci.yml) (format check → tests → build) and the [**CodeQL** security scan](.github/workflows/codeql.yml).
+
+## AI-assisted development
+
+This repo is set up for agentic AI coding tools. [`CLAUDE.md`](CLAUDE.md) documents the architecture and conventions, and [`.claude/skills/`](.claude/skills/) provides step-by-step playbooks for the two schema/API workflows that span multiple layers (adding a Flyway migration + jOOQ regen, and adding a REST endpoint with its OpenAPI update).

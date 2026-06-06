@@ -1,0 +1,44 @@
+# Self-building Dockerfile — Render compiles the image from source (see deploy/render/README.md).
+version: "1"
+
+databases:
+  - name: resume-scope-db
+    plan: free
+
+services:
+  - type: web
+    name: resume-scope
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/job-roles
+    # Deploys are driven by the GitHub Actions workflow (deploy-render.yml) via
+    # a deploy hook, not by Render's git auto-deploy.
+    autoDeploy: false
+    envVars:
+      - key: DEPLOYMENT_ENV
+        value: production
+      - key: PGHOST
+        fromDatabase:
+          name: resume-scope-db
+          property: host
+      - key: PGPORT
+        fromDatabase:
+          name: resume-scope-db
+          property: port
+      - key: PGDATABASE
+        fromDatabase:
+          name: resume-scope-db
+          property: database
+      - key: PGUSER
+        fromDatabase:
+          name: resume-scope-db
+          property: user
+      - key: PGPASSWORD
+        fromDatabase:
+          name: resume-scope-db
+          property: password
+      - key: OPENAI_API_KEY
+        sync: false
