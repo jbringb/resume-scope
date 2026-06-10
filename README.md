@@ -27,9 +27,10 @@ The analysis runs **asynchronously**: triggering an analysis returns `202 Accept
 
 ## Deployments
 
-The [Dockerfile](Dockerfile) is **self-building** (it compiles the boot jar from source inside the image — no local build step). See:
+The [Dockerfile](Dockerfile) is **self-building** (it compiles the boot jar from source inside the image — no local build step). Deploys are triggered manually via GitHub Actions (`workflow_dispatch`). See:
 
-- [Render.com](deploy/render/README.md) — Blueprint [`render.yaml`](render.yaml) (Docker web service + Postgres), deployed via GitHub Actions
+- [Render.com](deploy/render/README.md) — Blueprint [`render.yaml`](render.yaml) (Docker web service + free Postgres), deployed via [`deploy-render.yml`](.github/workflows/deploy-render.yml)
+- [AWS — ECS Express Mode](deploy/aws/README.md) — ECR image push + Fargate service + auto ALB/HTTPS, deployed via [`deploy-aws.yml`](.github/workflows/deploy-aws.yml)
 
 ---
 

@@ -1,0 +1,217 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  ResumeScope AWS deployment infrastructure: GitHub OIDC deploy role, the two
+  ECS Express roles, an ECR repository, an RDS PostgreSQL instance, and a
+  Secrets Manager secret holding the app's runtime secrets. Deploy once; the
+  GitHub Actions workflow (deploy-aws.yml) then builds, pushes, and rolls the
+  ECS Express service. Tear everything down with `delete-stack`.
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Default: jbringb/resume-scope
+    Description: owner/repo allowed to assume the deploy role via OIDC.
+
+  CreateOidcProvider:
+    Type: String
+    Default: "Yes"
+    AllowedValues: ["Yes", "No"]
+    Description: >-
+      Create the GitHub OIDC provider. Set to "No" if your account already has
+      one for token.actions.githubusercontent.com (an account allows only one).
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the database (use the default VPC).
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Two or more subnets (different AZs) from the chosen VPC.
+
+  VpcCidr:
+    Type: String
+    Default: 172.31.0.0/16
+    Description: CIDR allowed to reach the DB on 5432 (default VPC is usually this).
+
+  DbPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: RDS master password (also stored in the app secret as DB_PASSWORD).
+
+  OpenAiApiKey:
+    Type: String
+    NoEcho: true
+    Description: OpenAI (or compatible) API key.
+
+  ApiKey:
+    Type: String
+    NoEcho: true
+    Description: Shared secret clients send as the X-API-Key header on /api/**.
+
+Conditions:
+  ShouldCreateOidc: !Equals [!Ref CreateOidcProvider, "Yes"]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOidc
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: github-actions-ecs-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              # Reference the resource when we create it (forces CloudFormation to
+              # create the provider before this role); otherwise use the static ARN.
+              Federated: !If
+                - ShouldCreateOidc
+                - !Ref GitHubOidcProvider
+                - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:*
+      Policies:
+        - PolicyName: ecr-and-ecs-express-deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !GetAtt EcrRepository.Arn
+              - Effect: Allow
+                Action:
+                  - ecs:CreateExpressGatewayService
+                  - ecs:UpdateExpressGatewayService
+                  - ecs:DescribeExpressGatewayService
+                  - ecs:DeleteExpressGatewayService
+                Resource: "*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !GetAtt EcsTaskExecutionRole.Arn
+                  - !GetAtt EcsInfrastructureRole.Arn
+
+  EcsTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ecsTaskExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-app-secret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AppSecret
+
+  EcsInfrastructureRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ecsInfrastructureRoleForExpressServices
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRoleforExpressGatewayServices
+
+  EcrRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: resume-scope
+      EmptyOnDelete: true
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  AppSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ResumeScope runtime secrets (OpenAI key, API key, DB password).
+      SecretString: !Sub |
+        {"OPENAI_API_KEY":"${OpenAiApiKey}","API_KEY":"${ApiKey}","DB_PASSWORD":"${DbPassword}"}
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: resume-scope RDS - Postgres 5432 from within the VPC only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !Ref VpcCidr
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: resume-scope DB subnets
+      SubnetIds: !Ref SubnetIds
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    Properties:
+      DBInstanceIdentifier: resume-scope
+      Engine: postgres
+      EngineVersion: "17"
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: "20"
+      DBName: resumescope
+      MasterUsername: resumescope
+      MasterUserPassword: !Ref DbPassword
+      PubliclyAccessible: false
+      VPCSecurityGroups: [!Ref DbSecurityGroup]
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      BackupRetentionPeriod: 0
+
+Outputs:
+  DeployRoleArn:
+    Description: -> GitHub secret AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt DeployRole.Arn
+  ExecutionRoleArn:
+    Description: -> GitHub secret ECS_EXECUTION_ROLE_ARN
+    Value: !GetAtt EcsTaskExecutionRole.Arn
+  InfrastructureRoleArn:
+    Description: -> GitHub secret ECS_INFRASTRUCTURE_ROLE_ARN
+    Value: !GetAtt EcsInfrastructureRole.Arn
+  AppSecretArn:
+    Description: -> GitHub variable APP_SECRET_ARN
+    Value: !Ref AppSecret
+  RdsEndpoint:
+    Description: -> GitHub variable RDS_ENDPOINT
+    Value: !GetAtt Database.Endpoint.Address
+  EcrRepositoryUri:
+    Description: ECR repository URI (informational)
+    Value: !GetAtt EcrRepository.RepositoryUri
