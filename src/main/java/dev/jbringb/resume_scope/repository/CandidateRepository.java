@@ -3,12 +3,12 @@ package dev.jbringb.resume_scope.repository;
 import static dev.jbringb.resume_scope.db.generated.Tables.CANDIDATE;
 
 import dev.jbringb.resume_scope.db.generated.tables.records.CandidateRecord;
-import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.jooq.DSLContext;
 import org.springframework.stereotype.Repository;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 @Repository
 @RequiredArgsConstructor
@@ -16,30 +16,27 @@ public class CandidateRepository {
 
     private final DSLContext dsl;
 
-    public List<CandidateRecord> findByJobRoleId(UUID jobRoleId) {
-        return dsl.selectFrom(CANDIDATE)
+    public Flux<CandidateRecord> findByJobRoleId(UUID jobRoleId) {
+        return Flux.from(dsl.selectFrom(CANDIDATE)
                 .where(CANDIDATE.JOB_ROLE_ID.eq(jobRoleId))
-                .orderBy(CANDIDATE.CREATED_AT.asc())
-                .fetchInto(CandidateRecord.class);
+                .orderBy(CANDIDATE.CREATED_AT.asc()));
     }
 
-    public Optional<CandidateRecord> findByIdAndJobRoleId(UUID candidateId, UUID jobRoleId) {
-        return dsl.selectFrom(CANDIDATE)
-                .where(CANDIDATE.ID.eq(candidateId).and(CANDIDATE.JOB_ROLE_ID.eq(jobRoleId)))
-                .fetchOptionalInto(CandidateRecord.class);
+    public Mono<CandidateRecord> findByIdAndJobRoleId(UUID candidateId, UUID jobRoleId) {
+        return Mono.from(
+                dsl.selectFrom(CANDIDATE).where(CANDIDATE.ID.eq(candidateId).and(CANDIDATE.JOB_ROLE_ID.eq(jobRoleId))));
     }
 
-    public CandidateRecord insert(UUID jobRoleId, String originalFilename, String cvText) {
-        return dsl.insertInto(CANDIDATE, CANDIDATE.JOB_ROLE_ID, CANDIDATE.ORIGINAL_FILENAME, CANDIDATE.CV_TEXT)
-                .values(jobRoleId, originalFilename, cvText)
-                .returning()
-                .fetchSingleInto(CandidateRecord.class);
+    public Mono<CandidateRecord> insert(UUID jobRoleId, String originalFilename, String cvText) {
+        return Mono.from(
+                dsl.insertInto(CANDIDATE, CANDIDATE.JOB_ROLE_ID, CANDIDATE.ORIGINAL_FILENAME, CANDIDATE.CV_TEXT)
+                        .values(jobRoleId, originalFilename, cvText)
+                        .returning());
     }
 
-    public boolean deleteByIdAndJobRoleId(UUID candidateId, UUID jobRoleId) {
-        return dsl.deleteFrom(CANDIDATE)
-                        .where(CANDIDATE.ID.eq(candidateId).and(CANDIDATE.JOB_ROLE_ID.eq(jobRoleId)))
-                        .execute()
-                > 0;
+    public Mono<Boolean> deleteByIdAndJobRoleId(UUID candidateId, UUID jobRoleId) {
+        return Mono.from(dsl.deleteFrom(CANDIDATE)
+                        .where(CANDIDATE.ID.eq(candidateId).and(CANDIDATE.JOB_ROLE_ID.eq(jobRoleId))))
+                .map(rows -> rows > 0);
     }
 }

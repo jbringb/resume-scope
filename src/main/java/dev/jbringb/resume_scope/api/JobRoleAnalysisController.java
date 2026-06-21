@@ -17,7 +17,6 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 @RestController
 @RequestMapping("/api/job-roles/{jobRoleId}")
@@ -30,19 +29,18 @@ public class JobRoleAnalysisController {
     public Mono<ResponseEntity<TriggerAnalysisResponse>> analyze(
             @PathVariable UUID jobRoleId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        return Mono.fromCallable(() -> ResponseEntity.status(HttpStatus.ACCEPTED)
-                        .body(analysisSvc.triggerAnalysis(jobRoleId, Optional.ofNullable(idempotencyKey))))
-                .subscribeOn(Schedulers.boundedElastic());
+        return analysisSvc
+                .triggerAnalysis(jobRoleId, Optional.ofNullable(idempotencyKey))
+                .map(body -> ResponseEntity.status(HttpStatus.ACCEPTED).body(body));
     }
 
     @GetMapping("/analysis-runs")
     public Mono<List<AnalysisRunResponse>> listRuns(@PathVariable UUID jobRoleId) {
-        return Mono.fromCallable(() -> analysisSvc.listRuns(jobRoleId)).subscribeOn(Schedulers.boundedElastic());
+        return analysisSvc.listRuns(jobRoleId);
     }
 
     @GetMapping("/results")
     public Mono<JobRoleResultsResponse> latestResults(@PathVariable UUID jobRoleId) {
-        return Mono.fromCallable(() -> analysisSvc.latestResultsForJobRole(jobRoleId))
-                .subscribeOn(Schedulers.boundedElastic());
+        return analysisSvc.latestResultsForJobRole(jobRoleId);
     }
 }

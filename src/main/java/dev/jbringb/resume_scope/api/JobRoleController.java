@@ -16,7 +16,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 @RestController
 @RequestMapping("/api/job-roles")
@@ -27,28 +26,26 @@ public class JobRoleController {
 
     @GetMapping
     public Mono<List<JobRoleResponse>> list() {
-        return Mono.fromCallable(jobRoleSvc::list).subscribeOn(Schedulers.boundedElastic());
+        return jobRoleSvc.list();
     }
 
     @PostMapping
     public Mono<JobRoleResponse> create(@Valid @RequestBody JobRoleRequest body) {
-        return Mono.fromCallable(() -> jobRoleSvc.create(body)).subscribeOn(Schedulers.boundedElastic());
+        return jobRoleSvc.create(body);
     }
 
     @GetMapping("/{id}")
     public Mono<JobRoleResponse> get(@PathVariable UUID id) {
-        return Mono.fromCallable(() -> jobRoleSvc.get(id)).subscribeOn(Schedulers.boundedElastic());
+        return jobRoleSvc.get(id);
     }
 
     @PutMapping("/{id}")
     public Mono<JobRoleResponse> update(@PathVariable UUID id, @Valid @RequestBody JobRoleRequest body) {
-        return Mono.fromCallable(() -> jobRoleSvc.update(id, body)).subscribeOn(Schedulers.boundedElastic());
+        return jobRoleSvc.update(id, body);
     }
 
     @DeleteMapping("/{id}")
     public Mono<Void> delete(@PathVariable UUID id) {
-        return Mono.fromRunnable(() -> jobRoleSvc.delete(id))
-                .subscribeOn(Schedulers.boundedElastic())
-                .then();
+        return jobRoleSvc.delete(id);
     }
 }

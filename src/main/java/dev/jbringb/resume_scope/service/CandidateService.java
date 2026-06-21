@@ -26,51 +26,39 @@ public class CandidateService {
     private final PdfTextExtractor pdfTextExtractor;
 
     public Mono<List<CandidateResponse>> list(UUID jobRoleId) {
-        return Mono.fromCallable(() -> {
-                    ensureJobRole(jobRoleId);
-                    return candidateRepo.findByJobRoleId(jobRoleId).stream()
-                            .map(this::toDto)
-                            .toList();
-                })
-                .subscribeOn(Schedulers.boundedElastic());
+        return ensureJobRole(jobRoleId)
+                .thenMany(candidateRepo.findByJobRoleId(jobRoleId))
+                .map(this::toDto)
+                .collectList();
     }
 
     public Mono<List<CandidateResponse>> uploadPdfs(UUID jobRoleId, Flux<FilePart> files) {
-        return ensureJobRoleMono(jobRoleId)
+        return ensureJobRole(jobRoleId)
                 .thenMany(files.concatMap(this::readFileBytes))
-                .concatMap(bytesAndName -> Mono.fromCallable(() -> {
-                            String text = pdfTextExtractor.extract(bytesAndName.bytes());
-                            var row = candidateRepo.insert(jobRoleId, bytesAndName.filename(), text);
-                            return toDto(row);
-                        })
-                        .subscribeOn(Schedulers.boundedElastic()))
+                .concatMap(fb -> extractText(fb.bytes())
+                        .flatMap(text -> candidateRepo.insert(jobRoleId, fb.filename(), text))
+                        .map(this::toDto))
                 .collectList();
     }
 
     public Mono<Void> delete(UUID jobRoleId, UUID candidateId) {
-        return Mono.fromRunnable(() -> {
-                    ensureJobRole(jobRoleId);
-                    if (!candidateRepo.deleteByIdAndJobRoleId(candidateId, jobRoleId)) {
-                        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Candidate not found");
-                    }
-                })
-                .subscribeOn(Schedulers.boundedElastic())
+        return ensureJobRole(jobRoleId)
+                .then(candidateRepo.deleteByIdAndJobRoleId(candidateId, jobRoleId))
+                .flatMap(deleted -> deleted
+                        ? Mono.<Void>empty()
+                        : Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Candidate not found")));
+    }
+
+    private Mono<Void> ensureJobRole(UUID jobRoleId) {
+        return jobRoleRepo
+                .findById(jobRoleId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Job role not found")))
                 .then();
     }
 
-    private Mono<Void> ensureJobRoleMono(UUID jobRoleId) {
-        return Mono.fromCallable(() -> {
-                    ensureJobRole(jobRoleId);
-                    return true;
-                })
-                .subscribeOn(Schedulers.boundedElastic())
-                .then();
-    }
-
-    private void ensureJobRole(UUID jobRoleId) {
-        if (jobRoleRepo.findById(jobRoleId).isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Job role not found");
-        }
+    // PDFBox parsing is blocking/CPU-bound — offload it (a legitimate use of boundedElastic).
+    private Mono<String> extractText(byte[] bytes) {
+        return Mono.fromCallable(() -> pdfTextExtractor.extract(bytes)).subscribeOn(Schedulers.boundedElastic());
     }
 
     private Mono<FileBytes> readFilePart(FilePart part) {
@@ -83,7 +71,7 @@ public class CandidateService {
         });
     }
 
-    /** PDF parts only; skip empty or non-pdf names with a 400. */
+    /** PDF parts only; reject empty or non-pdf names with a 400. */
     private Mono<FileBytes> readFileBytes(FilePart part) {
         String fn = part.filename() != null ? part.filename() : "";
         if (!fn.toLowerCase().endsWith(".pdf")) {

@@ -2,11 +2,13 @@ spring:
   application:
     name: resume-scope
 
-  datasource:
-    url:               ${SPRING_DATASOURCE_URL:jdbc:postgresql://${PGHOST:localhost}:${PGPORT:5432}/${PGDATABASE:resumescope}}
-    username:          ${SPRING_DATASOURCE_USERNAME:${PGUSER:resumescope}}
-    password:          ${SPRING_DATASOURCE_PASSWORD:${PGPASSWORD:resumescope}}
-    driver-class-name: org.postgresql.Driver
+  # R2DBC — used by jOOQ at runtime for non-blocking queries (see PersistenceConfiguration).
+  # With R2DBC present Spring Boot does not auto-configure a JDBC DataSource, so Flyway is
+  # given its own JDBC connection below (it has no R2DBC support).
+  r2dbc:
+    url:      ${SPRING_R2DBC_URL:r2dbc:postgresql://${PGHOST:localhost}:${PGPORT:5432}/${PGDATABASE:resumescope}}
+    username: ${SPRING_R2DBC_USERNAME:${PGUSER:resumescope}}
+    password: ${SPRING_R2DBC_PASSWORD:${PGPASSWORD:resumescope}}
 
   jooq:
     sql-dialect: postgres
@@ -14,6 +16,9 @@ spring:
   flyway:
     enabled:   true
     locations: classpath:db/migration
+    url:       ${SPRING_DATASOURCE_URL:jdbc:postgresql://${PGHOST:localhost}:${PGPORT:5432}/${PGDATABASE:resumescope}}
+    user:      ${SPRING_DATASOURCE_USERNAME:${PGUSER:resumescope}}
+    password:  ${SPRING_DATASOURCE_PASSWORD:${PGPASSWORD:resumescope}}
 
   ai:
     openai:
@@ -54,7 +59,7 @@ logging:
   charset:
     console: UTF-8
   level:
-    root: DEBUG
+    root: INFO
   structured:
     format:
       console: ${LOGGING_STRUCTURED_FORMAT_CONSOLE:ecs}

@@ -376,6 +376,33 @@
           "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
+    },
+    "/api/analysis-runs/{runId}/events": {
+      "get": {
+        "tags": ["Analysis"],
+        "summary": "Stream live run status via Server-Sent Events",
+        "description": "text/event-stream of run-status events. Emits the current run state immediately, then each status change, and completes when the run reaches COMPLETED or FAILED. Each event is named 'run-status' with an AnalysisRunResponse data payload.",
+        "operationId": "streamAnalysisRunEvents",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream of run-status events (closes on terminal status)",
+            "content": {
+              "text/event-stream": {
+                "schema": { "$ref": "#/components/schemas/AnalysisRunResponse" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
     }
   },
   "security": [{ "ApiKeyAuth": [] }],

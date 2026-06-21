@@ -24,10 +24,9 @@ import org.jooq.JSONB;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 @Service
 @RequiredArgsConstructor
@@ -50,42 +49,48 @@ public class AnalysisService {
     @Value("${analysis.run-timeout-minutes:10}")
     private int runTimeoutMinutes = 10;
 
-    @Transactional
-    public TriggerAnalysisResponse triggerAnalysis(UUID jobRoleId, Optional<String> idempotencyKeyHeader) {
+    public Mono<TriggerAnalysisResponse> triggerAnalysis(UUID jobRoleId, Optional<String> idempotencyKeyHeader) {
         log.info("Triggering analysis for job role {}", jobRoleId);
-        if (jobRoleRepo.findById(jobRoleId).isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Job role not found");
-        }
-        if (candidateRepo.findByJobRoleId(jobRoleId).isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No candidates to analyze");
-        }
+        return jobRoleRepo
+                .findById(jobRoleId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Job role not found")))
+                .flatMap(role -> candidateRepo.findByJobRoleId(jobRoleId).hasElements())
+                .flatMap(hasCandidates -> {
+                    if (!hasCandidates) {
+                        return Mono.error(
+                                new ResponseStatusException(HttpStatus.BAD_REQUEST, "No candidates to analyze"));
+                    }
+                    var key = normalizeIdempotencyKey(idempotencyKeyHeader);
+                    return key.isEmpty() ? insertRunAndSchedule(jobRoleId) : idempotentTrigger(jobRoleId, key.get());
+                });
+    }
 
-        var key = normalizeIdempotencyKey(idempotencyKeyHeader);
-        if (key.isEmpty()) {
-            return insertRunAndSchedule(jobRoleId);
-        }
+    // Serialized per (jobRoleId, key) by the advisory lock: replay an active run, otherwise start a
+    // fresh one and repoint the key. A brand-new key inserts the mapping.
+    private Mono<TriggerAnalysisResponse> idempotentTrigger(UUID jobRoleId, String key) {
+        Mono<TriggerAnalysisResponse> action = analysisTriggerIdempotencyRepo
+                .findAnalysisRunId(jobRoleId, key)
+                .flatMap(existingRunId -> analysisRunRepo
+                        .findById(existingRunId)
+                        .flatMap(existingRun -> isActive(existingRun)
+                                ? Mono.just(new TriggerAnalysisResponse(existingRunId))
+                                : expireIfStale(existingRun).then(newRunRepointing(jobRoleId, key)))
+                        // Mapping exists but the run row is gone: start fresh and repoint.
+                        .switchIfEmpty(Mono.defer(() -> newRunRepointing(jobRoleId, key))))
+                .switchIfEmpty(Mono.defer(() -> newRunWithMapping(jobRoleId, key)));
+        return analysisTriggerIdempotencyLock.withJobRoleKeyLock(jobRoleId, key, action);
+    }
 
-        return analysisTriggerIdempotencyLock.withJobRoleKeyLock(jobRoleId, key.get(), () -> {
-            var existing = analysisTriggerIdempotencyRepo.findAnalysisRunId(jobRoleId, key.get());
-            if (existing.isPresent()) {
-                var existingRun = analysisRunRepo.findById(existing.get()).orElse(null);
-                if (existingRun != null && isActive(existingRun)) {
-                    log.info("Idempotent replay for job role {} → run {}", jobRoleId, existing.get());
-                    return new TriggerAnalysisResponse(existing.get());
-                }
-                // Previous run is done/failed/expired: fail it if still stuck, then start fresh.
-                if (existingRun != null) {
-                    expireIfStale(existingRun);
-                }
-                var fresh = insertRunAndSchedule(jobRoleId);
-                analysisTriggerIdempotencyRepo.repoint(jobRoleId, key.get(), fresh.runId());
-                log.info("Idempotency key expired for job role {} → new run {}", jobRoleId, fresh.runId());
-                return fresh;
-            }
-            var response = insertRunAndSchedule(jobRoleId);
-            analysisTriggerIdempotencyRepo.insert(jobRoleId, key.get(), response.runId());
-            return response;
-        });
+    private Mono<TriggerAnalysisResponse> newRunWithMapping(UUID jobRoleId, String key) {
+        return insertRunAndSchedule(jobRoleId).flatMap(resp -> analysisTriggerIdempotencyRepo
+                .insert(jobRoleId, key, resp.runId())
+                .thenReturn(resp));
+    }
+
+    private Mono<TriggerAnalysisResponse> newRunRepointing(UUID jobRoleId, String key) {
+        return insertRunAndSchedule(jobRoleId).flatMap(resp -> analysisTriggerIdempotencyRepo
+                .repoint(jobRoleId, key, resp.runId())
+                .thenReturn(resp));
     }
 
     private boolean isActive(AnalysisRunRecord run) {
@@ -97,40 +102,39 @@ public class AnalysisService {
         return triggeredAt == null || triggeredAt.isBefore(OffsetDateTime.now().minusMinutes(runTimeoutMinutes));
     }
 
-    // Lazily fail a non-terminal run that has outlived its TTL, so it stops showing PENDING/RUNNING.
-    private AnalysisRunRecord expireIfStale(AnalysisRunRecord run) {
-        if (!TERMINAL_STATUSES.contains(run.getStatus()) && isExpired(run)) {
-            var now = OffsetDateTime.now();
-            analysisRunRepo.updateStatus(run.getId(), "FAILED", now, EXPIRED_MESSAGE);
-            run.setStatus("FAILED");
-            run.setCompletedAt(now);
-            run.setErrorMessage(EXPIRED_MESSAGE);
+    // Lazily fail a non-terminal run that has outlived its timeout, so it stops showing PENDING/RUNNING.
+    private Mono<AnalysisRunRecord> expireIfStale(AnalysisRunRecord run) {
+        if (TERMINAL_STATUSES.contains(run.getStatus()) || !isExpired(run)) {
+            return Mono.just(run);
         }
-        return run;
+        var now = OffsetDateTime.now();
+        return analysisRunRepo
+                .updateStatus(run.getId(), "FAILED", now, EXPIRED_MESSAGE)
+                .thenReturn(run)
+                .map(r -> {
+                    r.setStatus("FAILED");
+                    r.setCompletedAt(now);
+                    r.setErrorMessage(EXPIRED_MESSAGE);
+                    return r;
+                });
     }
 
-    private TriggerAnalysisResponse insertRunAndSchedule(UUID jobRoleId) {
-        var run = analysisRunRepo.insertPending(jobRoleId);
-        var runId = run.getId();
-        log.info("Analysis run inserted: {}", runId);
-        scheduleProcessingAfterCommit(runId);
-        return new TriggerAnalysisResponse(runId);
+    private Mono<TriggerAnalysisResponse> insertRunAndSchedule(UUID jobRoleId) {
+        return analysisRunRepo
+                .insertPending(jobRoleId)
+                .map(AnalysisRunRecord::getId)
+                .doOnNext(runId -> log.info("Analysis run inserted: {}", runId))
+                .doOnNext(this::dispatchProcessing)
+                .map(TriggerAnalysisResponse::new);
     }
 
-    // The @Async worker uses a separate DB connection; dispatch it only after this
-    // transaction commits, otherwise it may not see the freshly-inserted run and
-    // would leave it stuck in PENDING.
-    private void scheduleProcessingAfterCommit(UUID runId) {
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    cvAnalyzerSvc.processAnalysisRunAsync(runId);
-                }
-            });
-        } else {
-            cvAnalyzerSvc.processAnalysisRunAsync(runId);
-        }
+    // The PENDING insert auto-commits on its own connection, so by the time this fires the run is
+    // durably visible — no afterCommit synchronization needed. Processing runs detached from the request.
+    private void dispatchProcessing(UUID runId) {
+        cvAnalyzerSvc
+                .processAnalysisRun(runId)
+                .subscribeOn(Schedulers.boundedElastic())
+                .subscribe(null, e -> log.error("Background analysis for run {} failed to start", runId, e));
     }
 
     private static Optional<String> normalizeIdempotencyKey(Optional<String> headerValue) {
@@ -147,47 +151,47 @@ public class AnalysisService {
         return Optional.of(trimmed);
     }
 
-    public List<AnalysisRunResponse> listRuns(UUID jobRoleId) {
-        if (jobRoleRepo.findById(jobRoleId).isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Job role not found");
-        }
-        return analysisRunRepo.findByJobRoleIdOrderByTriggeredDesc(jobRoleId).stream()
-                .map(this::expireIfStale)
+    public Mono<List<AnalysisRunResponse>> listRuns(UUID jobRoleId) {
+        return jobRoleRepo
+                .findById(jobRoleId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Job role not found")))
+                .thenMany(analysisRunRepo.findByJobRoleIdOrderByTriggeredDesc(jobRoleId))
+                .concatMap(this::expireIfStale)
                 .map(this::toRunDto)
-                .toList();
+                .collectList();
     }
 
-    public JobRoleResultsResponse latestResultsForJobRole(UUID jobRoleId) {
-        if (jobRoleRepo.findById(jobRoleId).isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Job role not found");
-        }
-        var run = analysisRunRepo
-                .findLatestCompletedByJobRoleId(jobRoleId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No completed analysis"));
-        return mapRunResults(jobRoleId, run);
+    public Mono<JobRoleResultsResponse> latestResultsForJobRole(UUID jobRoleId) {
+        return jobRoleRepo
+                .findById(jobRoleId)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Job role not found")))
+                .flatMap(role -> analysisRunRepo.findLatestCompletedByJobRoleId(jobRoleId))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "No completed analysis")))
+                .flatMap(run -> mapRunResults(jobRoleId, run));
     }
 
-    public AnalysisRunResponse getRun(UUID runId) {
+    public Mono<AnalysisRunResponse> getRun(UUID runId) {
         return analysisRunRepo
                 .findById(runId)
-                .map(this::expireIfStale)
-                .map(this::toRunDto)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Analysis run not found"));
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Analysis run not found")))
+                .flatMap(this::expireIfStale)
+                .map(this::toRunDto);
     }
 
-    public JobRoleResultsResponse resultsForRun(UUID runId) {
-        var run = analysisRunRepo
+    public Mono<JobRoleResultsResponse> resultsForRun(UUID runId) {
+        return analysisRunRepo
                 .findById(runId)
-                .map(this::expireIfStale)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Analysis run not found"));
-        return mapRunResults(run.getJobRoleId(), run);
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Analysis run not found")))
+                .flatMap(this::expireIfStale)
+                .flatMap(run -> mapRunResults(run.getJobRoleId(), run));
     }
 
-    private JobRoleResultsResponse mapRunResults(UUID jobRoleId, AnalysisRunRecord run) {
-        var results = analysisRepo.findByAnalysisRunId(run.getId()).stream()
+    private Mono<JobRoleResultsResponse> mapRunResults(UUID jobRoleId, AnalysisRunRecord run) {
+        return analysisRepo
+                .findByAnalysisRunId(run.getId())
                 .map(this::toResultDto)
-                .toList();
-        return new JobRoleResultsResponse(jobRoleId, run.getId(), run.getStatus(), results);
+                .collectList()
+                .map(results -> new JobRoleResultsResponse(jobRoleId, run.getId(), run.getStatus(), results));
     }
 
     private AnalysisRunResponse toRunDto(AnalysisRunRecord r) {

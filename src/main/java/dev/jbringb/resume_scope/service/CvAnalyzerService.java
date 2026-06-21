@@ -17,8 +17,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jooq.JSONB;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 @Service
 @RequiredArgsConstructor
@@ -33,58 +34,68 @@ public class CvAnalyzerService {
     private final AnalysisRepository analysisRepo;
     private final AnalysisEventBus eventBus;
 
-    @Async
-    public void processAnalysisRunAsync(UUID runId) {
-        try {
-            var run = analysisRunRepo.findById(runId).orElse(null);
-            if (run == null) {
-                log.warn("Analysis run {} not found — skipping (trigger transaction not committed?)", runId);
-                return;
-            }
-            log.info("Processing analysis run {}", runId);
-            var jobRoleId = run.getJobRoleId();
-            var role = jobRoleRepo.findById(jobRoleId).orElse(null);
-            if (role == null) {
-                failRun(runId, "Job role not found");
-                return;
-            }
-            analysisRunRepo.updateStatusOnly(runId, "RUNNING");
-            publishRun(runId);
-            var candidates = candidateRepo.findByJobRoleId(jobRoleId);
-            for (var candidate : candidates) {
-                var cvText = candidate.getCvText() == null ? "" : candidate.getCvText();
-                var ai = analyzeWithLlm(role, candidate, cvText);
-                var score = Math.clamp(ai.overallScore(), 0, 100);
-                analysisRepo.insert(
-                        candidate.getId(),
-                        runId,
-                        score,
-                        null,
-                        jsonArray(ai.strengths()),
-                        jsonArray(ai.weaknesses()),
-                        ai.summary(),
-                        ai.recommendation(),
-                        emptyToNull(ai.extractedName()),
-                        emptyToNull(ai.extractedEmail()));
-            }
-            applyRanks(runId);
-            analysisRunRepo.updateStatus(runId, "COMPLETED", OffsetDateTime.now(), null);
-            publishRun(runId);
-        } catch (Exception e) {
-            log.error("Analysis run {} failed", runId, e);
-            failRun(
-                    runId,
-                    e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
-        }
+    public Mono<Void> processAnalysisRun(UUID runId) {
+        return analysisRunRepo
+                .findById(runId)
+                .switchIfEmpty(Mono.<AnalysisRunRecord>fromRunnable(() ->
+                        log.warn("Analysis run {} not found — skipping (trigger transaction not committed?)", runId)))
+                .flatMap(run -> runAnalysis(runId, run.getJobRoleId()))
+                .onErrorResume(e -> {
+                    log.error("Analysis run {} failed", runId, e);
+                    return failRun(
+                            runId,
+                            e.getMessage() != null
+                                    ? e.getMessage()
+                                    : e.getClass().getSimpleName());
+                });
     }
 
-    private void failRun(UUID runId, String message) {
-        analysisRunRepo.updateStatus(runId, "FAILED", OffsetDateTime.now(), message);
-        publishRun(runId);
+    private Mono<Void> runAnalysis(UUID runId, UUID jobRoleId) {
+        return jobRoleRepo
+                .findById(jobRoleId)
+                .switchIfEmpty(
+                        Mono.defer(() -> failRun(runId, "Job role not found").then(Mono.empty())))
+                .flatMap(role -> analysisRunRepo
+                        .updateStatusOnly(runId, "RUNNING")
+                        .then(publishRun(runId))
+                        .thenMany(candidateRepo.findByJobRoleId(jobRoleId))
+                        .concatMap(candidate -> analyzeAndInsert(role, candidate, runId))
+                        .then(applyRanks(runId))
+                        .then(analysisRunRepo.updateStatus(runId, "COMPLETED", OffsetDateTime.now(), null))
+                        .then(publishRun(runId)));
     }
 
-    private void publishRun(UUID runId) {
-        analysisRunRepo.findById(runId).map(this::toRunDto).ifPresent(eventBus::publish);
+    private Mono<Void> analyzeAndInsert(JobRoleRecord role, CandidateRecord candidate, UUID runId) {
+        var cvText = candidate.getCvText() == null ? "" : candidate.getCvText();
+        return analyzeWithLlm(role, candidate, cvText)
+                .flatMap(ai -> {
+                    var score = Math.clamp(ai.overallScore(), 0, 100);
+                    return analysisRepo.insert(
+                            candidate.getId(),
+                            runId,
+                            score,
+                            null,
+                            jsonArray(ai.strengths()),
+                            jsonArray(ai.weaknesses()),
+                            ai.summary(),
+                            ai.recommendation(),
+                            emptyToNull(ai.extractedName()),
+                            emptyToNull(ai.extractedEmail()));
+                })
+                .then();
+    }
+
+    private Mono<Void> failRun(UUID runId, String message) {
+        return analysisRunRepo
+                .updateStatus(runId, "FAILED", OffsetDateTime.now(), message)
+                .then(publishRun(runId));
+    }
+
+    private Mono<Void> publishRun(UUID runId) {
+        return analysisRunRepo
+                .findById(runId)
+                .doOnNext(r -> eventBus.publish(toRunDto(r)))
+                .then();
     }
 
     private AnalysisRunResponse toRunDto(AnalysisRunRecord r) {
@@ -97,12 +108,13 @@ public class CvAnalyzerService {
                 r.getErrorMessage());
     }
 
-    private void applyRanks(UUID runId) {
-        var ordered = analysisRepo.findByAnalysisRunIdOrderByScoreDesc(runId);
-        int rank = 1;
-        for (var row : ordered) {
-            analysisRepo.updateRank(row.getId(), rank++);
-        }
+    // Re-rank 1..N by descending score, preserving the score-ordered emission order.
+    private Mono<Void> applyRanks(UUID runId) {
+        return analysisRepo
+                .findByAnalysisRunIdOrderByScoreDesc(runId)
+                .index()
+                .concatMap(indexed -> analysisRepo.updateRank(indexed.getT2().getId(), (int) (indexed.getT1() + 1)))
+                .then();
     }
 
     private JSONB jsonArray(List<String> items) {
@@ -117,20 +129,24 @@ public class CvAnalyzerService {
         return s == null || s.isBlank() ? null : s.strip();
     }
 
-    private CvAnalysisResult analyzeWithLlm(JobRoleRecord role, CandidateRecord candidate, String cvText)
-            throws Exception {
-        String prompt = buildUserPrompt(role, candidate, cvText);
-        var raw = chatClient.prompt().user(prompt).call().content();
-        var json = stripMarkdownFences(raw);
-        var parsed = objectMapper.readValue(json, CvAnalysisResult.class);
-        return new CvAnalysisResult(
-                parsed.overallScore(),
-                parsed.strengths() == null ? List.of() : parsed.strengths(),
-                parsed.weaknesses() == null ? List.of() : parsed.weaknesses(),
-                parsed.summary() == null ? "" : parsed.summary(),
-                parsed.recommendation() == null ? "" : parsed.recommendation(),
-                parsed.extractedName(),
-                parsed.extractedEmail());
+    // The OpenAI call is blocking (Spring AI has no reactive ChatClient.call), so offload it to the
+    // bounded-elastic scheduler — a legitimate use, unlike wrapping the now-reactive DB calls.
+    private Mono<CvAnalysisResult> analyzeWithLlm(JobRoleRecord role, CandidateRecord candidate, String cvText) {
+        return Mono.fromCallable(() -> {
+                    String prompt = buildUserPrompt(role, candidate, cvText);
+                    var raw = chatClient.prompt().user(prompt).call().content();
+                    var json = stripMarkdownFences(raw);
+                    var parsed = objectMapper.readValue(json, CvAnalysisResult.class);
+                    return new CvAnalysisResult(
+                            parsed.overallScore(),
+                            parsed.strengths() == null ? List.of() : parsed.strengths(),
+                            parsed.weaknesses() == null ? List.of() : parsed.weaknesses(),
+                            parsed.summary() == null ? "" : parsed.summary(),
+                            parsed.recommendation() == null ? "" : parsed.recommendation(),
+                            parsed.extractedName(),
+                            parsed.extractedEmail());
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     private static String buildUserPrompt(JobRoleRecord role, CandidateRecord candidate, String cvText) {

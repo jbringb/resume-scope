@@ -6,11 +6,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.UUID;
-import java.util.function.Supplier;
 import lombok.RequiredArgsConstructor;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
 import org.springframework.stereotype.Component;
+import reactor.core.publisher.Mono;
 
 @Component
 @RequiredArgsConstructor
@@ -19,10 +19,14 @@ public class PostgresAnalysisTriggerIdempotencyLock implements AnalysisTriggerId
     private final DSLContext dsl;
 
     @Override
-    public <T> T withJobRoleKeyLock(UUID jobRoleId, String idempotencyKey, Supplier<T> action) {
+    public <T> Mono<T> withJobRoleKeyLock(UUID jobRoleId, String idempotencyKey, Mono<T> action) {
         long lockKey = advisoryLockKey(jobRoleId, idempotencyKey);
-        dsl.fetch(DSL.resultQuery("SELECT pg_advisory_xact_lock({0})", DSL.val(lockKey)));
-        return action.get();
+        // Acquire the lock and run the action inside one reactive transaction. The xact-scoped
+        // advisory lock is held until the transaction completes (i.e. until the action finishes),
+        // so a concurrent same-key trigger blocks on lock acquisition.
+        return Mono.from(dsl.transactionPublisher(
+                cfg -> Mono.from(cfg.dsl().resultQuery("SELECT pg_advisory_xact_lock({0})", DSL.val(lockKey)))
+                        .then(action)));
     }
 
     private static long advisoryLockKey(UUID jobRoleId, String idempotencyKey) {
