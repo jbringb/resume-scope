@@ -269,10 +269,11 @@ Every push and pull request runs the [**CI** workflow](.github/workflows/ci.yml)
 
 ## Smoke test
 
-An end-to-end smoke test in [`smoke_test/smoke.py`](smoke_test/smoke.py) spins up the full stack with Docker Compose, runs two job roles (Hotel Housekeeper and Junior Software Developer) with four CV fixtures, and verifies the SSE stream delivers a terminal status.
+An end-to-end smoke test in [`smoke_test/smoke.py`](smoke_test/smoke.py) creates two job roles, uploads four CV fixtures to each, triggers LLM analysis, prints ranked results, and verifies the SSE event stream reaches a terminal status.
 
-**Prerequisites:** Python 3.10+, `reportlab` (`pip install reportlab`), Docker Desktop, an OpenAI-compatible API key.
+**Prerequisites:** Python 3.10+, `reportlab` (`pip install reportlab`). Docker Desktop is only needed for local mode.
 
+**Local** (spins up the full stack via Docker Compose):
 ```bash
 # 1. Copy the env template and set your key
 cp smoke_test/.env.example smoke_test/.env
@@ -282,7 +283,14 @@ cp smoke_test/.env.example smoke_test/.env
 python smoke_test/smoke.py
 ```
 
-`smoke.py` builds the Docker image, starts Postgres, waits for health, creates two job roles, uploads all four CV PDFs to each, triggers LLM analysis, prints ranked results, verifies the SSE event stream reaches a terminal status, and tears the stack down. Set `KEEP_RUNNING=1` to leave it up after the test.
+**Remote / AWS** (runs against a deployed instance — no Docker needed):
+```bash
+BASE_URL=https://resume-scope.ecs.us-east-1.on.aws \
+API_KEY=<your-api-key> \
+python smoke_test/smoke.py
+```
+
+In local mode the script also builds and starts the Docker stack, then tears it down when done. Set `KEEP_RUNNING=1` to leave it up after the test.
 
 ---
 

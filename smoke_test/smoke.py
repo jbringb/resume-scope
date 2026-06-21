@@ -2,17 +2,25 @@
 """
 Smoke test for ResumeScope.
 
-Spins up the stack with docker compose, creates two job roles, uploads four
-CV PDFs to each, triggers LLM analysis, prints ranked results, and verifies
-the SSE endpoint streams a terminal status.
+Spins up the stack with docker compose (local mode), or runs against an
+already-deployed instance (remote mode).
 
 Usage (from project root):
+
+  Local (default):
+    python smoke_test/smoke.py
+
+  Remote / AWS:
+    BASE_URL=https://resume-scope.ecs.us-east-1.on.aws \\
+    API_KEY=<your-api-key> \\
+    SKIP_COMPOSE=1 \\
     python smoke_test/smoke.py
 
 Optional env vars:
     BASE_URL       API base URL (default http://localhost:8086)
-    SKIP_COMPOSE   set to 1 to skip docker compose up/down
-    KEEP_RUNNING   set to 1 to leave the stack running after the test
+    API_KEY        X-API-Key header value; required when auth is enabled
+    SKIP_COMPOSE   set to 1 to skip docker compose up/down (implied when BASE_URL is not localhost)
+    KEEP_RUNNING   set to 1 to leave the local stack running after the test
 """
 
 import json
@@ -30,8 +38,11 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 
-BASE_URL = os.environ.get("BASE_URL", "http://localhost:8086")
-SKIP_COMPOSE = os.environ.get("SKIP_COMPOSE", "0") == "1"
+BASE_URL = os.environ.get("BASE_URL", "http://localhost:8086").rstrip("/")
+API_KEY = os.environ.get("API_KEY", "")
+# Remote mode: skip compose when BASE_URL points somewhere other than localhost
+_is_remote = "localhost" not in BASE_URL and "127.0.0.1" not in BASE_URL
+SKIP_COMPOSE = os.environ.get("SKIP_COMPOSE", "1" if _is_remote else "0") == "1"
 KEEP_RUNNING = os.environ.get("KEEP_RUNNING", "0") == "1"
 
 SMOKE_ENV_FILE = SCRIPT_DIR / ".env"
@@ -172,8 +183,15 @@ import urllib.error
 import urllib.request
 
 
+def _auth_headers(extra: dict | None = None) -> dict:
+    h = dict(extra or {})
+    if API_KEY:
+        h["X-Api-Key"] = API_KEY
+    return h
+
+
 def _request(method: str, url: str, *, body=None, headers=None, timeout=30):
-    req = urllib.request.Request(url, method=method, headers=headers or {})
+    req = urllib.request.Request(url, method=method, headers=_auth_headers(headers))
     if body is not None:
         if isinstance(body, dict):
             encoded = json.dumps(body).encode()
@@ -210,7 +228,7 @@ def post_multipart(path: str, files: list[Path]) -> dict:
         f"{BASE_URL}{path}",
         data=body,
         method="POST",
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        headers=_auth_headers({"Content-Type": f"multipart/form-data; boundary={boundary}"}),
     )
     with urllib.request.urlopen(req, timeout=60) as resp:
         return json.loads(resp.read())
@@ -261,7 +279,7 @@ def print_results(run_id: str, role_title: str) -> None:
 
 def sse_stream_until_terminal(run_id: str, timeout_s: int = 120) -> int:
     url = f"{BASE_URL}/api/analysis-runs/{run_id}/events"
-    req = urllib.request.Request(url, headers={"Accept": "text/event-stream"})
+    req = urllib.request.Request(url, headers=_auth_headers({"Accept": "text/event-stream"}))
     events_seen = 0
     with urllib.request.urlopen(req, timeout=timeout_s) as resp:
         for raw_line in resp:
@@ -319,6 +337,11 @@ ROLES = [
 
 
 def preflight() -> None:
+    if _is_remote:
+        if not API_KEY:
+            print("WARNING: API_KEY not set — requests may be rejected if auth is enabled on the server.")
+        return
+
     if not SMOKE_ENV_FILE.exists():
         print(f"ERROR: missing {SMOKE_ENV_FILE}")
         print("  Create it and set OPENAI_API_KEY.")
@@ -355,6 +378,8 @@ def main() -> None:
     step += 1
     if not SKIP_COMPOSE:
         subprocess.run(COMPOSE_CMD + ["up", "-d", "--build"], check=True)
+    elif _is_remote:
+        print(f"  skipped (remote: {BASE_URL})")
     else:
         print("  skipped (SKIP_COMPOSE=1)")
 

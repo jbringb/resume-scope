@@ -76,7 +76,7 @@ jobs:
             [
               {"name":"SPRING_DATASOURCE_URL","value":"jdbc:postgresql://${{ vars.RDS_ENDPOINT }}:5432/resumescope"},
               {"name":"SPRING_DATASOURCE_USERNAME","value":"resumescope"},
-              {"name":"SPRING_R2DBC_URL","value":"r2dbc:postgresql://${{ vars.RDS_ENDPOINT }}:5432/resumescope"},
+              {"name":"SPRING_R2DBC_URL","value":"r2dbc:postgresql://${{ vars.RDS_ENDPOINT }}:5432/resumescope?sslMode=require"},
               {"name":"SPRING_R2DBC_USERNAME","value":"resumescope"},
               {"name":"DEPLOYMENT_ENV","value":"production"},
               {"name":"PORT","value":"8086"}
