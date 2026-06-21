@@ -267,6 +267,25 @@ Code is formatted with [Spotless](https://github.com/diffplug/spotless) using Pa
 
 Every push and pull request runs the [**CI** workflow](.github/workflows/ci.yml) (format check → tests → build) and the [**CodeQL** security scan](.github/workflows/codeql.yml).
 
+## Smoke test
+
+An end-to-end smoke test in [`smoke_test/smoke.py`](smoke_test/smoke.py) spins up the full stack with Docker Compose, runs two job roles (Hotel Housekeeper and Junior Software Developer) with four CV fixtures, and verifies the SSE stream delivers a terminal status.
+
+**Prerequisites:** Python 3.10+, `reportlab` (`pip install reportlab`), Docker Desktop, an OpenAI-compatible API key.
+
+```bash
+# 1. Copy the env template and set your key
+cp smoke_test/.env.example smoke_test/.env
+# edit smoke_test/.env — set OPENAI_API_KEY
+
+# 2. Run from the project root
+python smoke_test/smoke.py
+```
+
+`smoke.py` builds the Docker image, starts Postgres, waits for health, creates two job roles, uploads all four CV PDFs to each, triggers LLM analysis, prints ranked results, verifies the SSE event stream reaches a terminal status, and tears the stack down. Set `KEEP_RUNNING=1` to leave it up after the test.
+
+---
+
 ## Known limitations
 
 - **SSE is single-instance.** The run-status event bus is an in-memory reactive sink, so a client's SSE stream only sees events from the instance that is processing that run. Behind more than one replica, subscribe to the instance running the analysis or fall back to polling. Cross-instance fan-out (e.g. Postgres `LISTEN/NOTIFY` or Redis) is the scale-out path and is intentionally out of scope.

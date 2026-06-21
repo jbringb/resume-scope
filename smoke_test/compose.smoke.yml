@@ -1,0 +1,16 @@
+# Compose override for run_smoke.sh.
+#
+# We deliberately DON'T touch env_file: here. Instead we set the LLM config in
+# the `environment:` block (which always wins over env_file), with values
+# interpolated from test_scripts/.env via the script's `--env-file` flag.
+# This guarantees the smoke run uses the smoke key/model regardless of what's
+# in the project-root .env.
+services:
+  resume-scope:
+    environment:
+      # Force-clear in case the dev .env sets local-vllm.
+      SPRING_PROFILES_ACTIVE: ""
+      # Sourced from test_scripts/.env via `docker compose --env-file`.
+      OPENAI_API_KEY:  ${OPENAI_API_KEY:?set in test_scripts/.env}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
+      OPENAI_MODEL:    ${OPENAI_MODEL:-gpt-4o-mini}

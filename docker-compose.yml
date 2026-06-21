@@ -25,9 +25,12 @@ services:
       - .env
     environment:
       PORT: "8086"
-      SPRING_DATASOURCE_URL:      jdbc:postgresql://postgres:5432/resumescope
-      SPRING_DATASOURCE_USERNAME: resumescope
-      SPRING_DATASOURCE_PASSWORD: resumescope
+      # PG* feed both Flyway (JDBC) and jOOQ runtime (R2DBC); see application.yaml.
+      PGHOST:     postgres
+      PGPORT:     "5432"
+      PGDATABASE: resumescope
+      PGUSER:     resumescope
+      PGPASSWORD: resumescope
     depends_on:
       postgres:
         condition: service_healthy

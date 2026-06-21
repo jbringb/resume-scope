@@ -39,3 +39,6 @@ out/
 
 ### Claude Code ###
 .claude/scheduled_tasks.lock
+
+### Smoke test secrets and generated artefacts ###
+smoke_test/.env
