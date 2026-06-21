@@ -1,10 +1,12 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   ResumeScope AWS deployment infrastructure: GitHub OIDC deploy role, the two
-  ECS Express roles, an ECR repository, an RDS PostgreSQL instance, and a
-  Secrets Manager secret holding the app's runtime secrets. Deploy once; the
-  GitHub Actions workflow (deploy-aws.yml) then builds, pushes, and rolls the
-  ECS Express service. Tear everything down with `delete-stack`.
+  ECS Express roles, an ECR repository, and an RDS PostgreSQL instance. Deploy
+  once; the GitHub Actions workflow (deploy-aws.yml) then builds, pushes, and
+  rolls the ECS Express service. Tear everything down with `delete-stack`.
+  Runtime secrets (OPENAI_API_KEY, API_KEY, DB_PASSWORD) are stored as SSM
+  SecureString parameters under /resume-scope/ — create them manually after
+  the stack deploys (CloudFormation cannot create SecureString parameters).
 
 Parameters:
   GitHubRepo:
@@ -37,17 +39,7 @@ Parameters:
     Type: String
     NoEcho: true
     MinLength: 8
-    Description: RDS master password (also stored in the app secret as DB_PASSWORD).
-
-  OpenAiApiKey:
-    Type: String
-    NoEcho: true
-    Description: OpenAI (or compatible) API key.
-
-  ApiKey:
-    Type: String
-    NoEcho: true
-    Description: Shared secret clients send as the X-API-Key header on /api/**.
+    Description: RDS master password. Must match /resume-scope/db_password SSM parameter.
 
 Conditions:
   ShouldCreateOidc: !Equals [!Ref CreateOidcProvider, "Yes"]
@@ -95,17 +87,16 @@ Resources:
               - Effect: Allow
                 Action:
                   - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
                   - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
                   - ecr:InitiateLayerUpload
                   - ecr:PutImage
                   - ecr:UploadLayerPart
                 Resource: !GetAtt EcrRepository.Arn
               - Effect: Allow
                 Action:
-                  - ecs:CreateExpressGatewayService
-                  - ecs:UpdateExpressGatewayService
-                  - ecs:DescribeExpressGatewayService
-                  - ecs:DeleteExpressGatewayService
+                  - ecs:*
                 Resource: "*"
               - Effect: Allow
                 Action: iam:PassRole
@@ -126,13 +117,13 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
       Policies:
-        - PolicyName: read-app-secret
+        - PolicyName: read-ssm-secrets
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action: secretsmanager:GetSecretValue
-                Resource: !Ref AppSecret
+                Action: ssm:GetParameters
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/resume-scope/*
 
   EcsInfrastructureRole:
     Type: AWS::IAM::Role
@@ -154,13 +145,6 @@ Resources:
       EmptyOnDelete: true
       ImageScanningConfiguration:
         ScanOnPush: true
-
-  AppSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Description: ResumeScope runtime secrets (OpenAI key, API key, DB password).
-      SecretString: !Sub |
-        {"OPENAI_API_KEY":"${OpenAiApiKey}","API_KEY":"${ApiKey}","DB_PASSWORD":"${DbPassword}"}
 
   DbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -206,9 +190,6 @@ Outputs:
   InfrastructureRoleArn:
     Description: -> GitHub secret ECS_INFRASTRUCTURE_ROLE_ARN
     Value: !GetAtt EcsInfrastructureRole.Arn
-  AppSecretArn:
-    Description: -> GitHub variable APP_SECRET_ARN
-    Value: !Ref AppSecret
   RdsEndpoint:
     Description: -> GitHub variable RDS_ENDPOINT
     Value: !GetAtt Database.Endpoint.Address

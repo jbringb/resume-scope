@@ -4,13 +4,13 @@ name: Deploy · AWS (ECS Express)
 # The action creates the service on first run and updates it on subsequent runs.
 # All AWS infrastructure (roles, ECR, RDS, secret) is provisioned by deploy/aws/infra.yaml.
 #
-# GitHub Environment "aws" — secrets (3) and variables (3), all from the CloudFormation outputs:
+# GitHub Environment "aws" — secrets (3) and variables (4), all from the CloudFormation outputs:
 #   secret  AWS_DEPLOY_ROLE_ARN          → output DeployRoleArn
 #   secret  ECS_EXECUTION_ROLE_ARN       → output ExecutionRoleArn
 #   secret  ECS_INFRASTRUCTURE_ROLE_ARN  → output InfrastructureRoleArn
 #   var     AWS_REGION                   → the region you deployed the stack in
+#   var     AWS_ACCOUNT_ID               → your 12-digit AWS account ID
 #   var     RDS_ENDPOINT                 → output RdsEndpoint
-#   var     APP_SECRET_ARN               → output AppSecretArn
 
 on:
   workflow_dispatch:
@@ -75,12 +75,15 @@ jobs:
             [
               {"name":"SPRING_DATASOURCE_URL","value":"jdbc:postgresql://${{ vars.RDS_ENDPOINT }}:5432/resumescope"},
               {"name":"SPRING_DATASOURCE_USERNAME","value":"resumescope"},
+              {"name":"SPRING_R2DBC_URL","value":"r2dbc:postgresql://${{ vars.RDS_ENDPOINT }}:5432/resumescope"},
+              {"name":"SPRING_R2DBC_USERNAME","value":"resumescope"},
               {"name":"DEPLOYMENT_ENV","value":"production"},
               {"name":"PORT","value":"8086"}
             ]
           secrets: >-
             [
-              {"name":"OPENAI_API_KEY","valueFrom":"${{ vars.APP_SECRET_ARN }}:OPENAI_API_KEY::"},
-              {"name":"SPRING_DATASOURCE_PASSWORD","valueFrom":"${{ vars.APP_SECRET_ARN }}:DB_PASSWORD::"},
-              {"name":"API_KEY","valueFrom":"${{ vars.APP_SECRET_ARN }}:API_KEY::"}
+              {"name":"OPENAI_API_KEY","valueFrom":"arn:aws:ssm:${{ vars.AWS_REGION }}:${{ vars.AWS_ACCOUNT_ID }}:parameter/resume-scope/openai_api_key"},
+              {"name":"SPRING_DATASOURCE_PASSWORD","valueFrom":"arn:aws:ssm:${{ vars.AWS_REGION }}:${{ vars.AWS_ACCOUNT_ID }}:parameter/resume-scope/db_password"},
+              {"name":"SPRING_R2DBC_PASSWORD","valueFrom":"arn:aws:ssm:${{ vars.AWS_REGION }}:${{ vars.AWS_ACCOUNT_ID }}:parameter/resume-scope/db_password"},
+              {"name":"API_KEY","valueFrom":"arn:aws:ssm:${{ vars.AWS_REGION }}:${{ vars.AWS_ACCOUNT_ID }}:parameter/resume-scope/api_key"}
             ]
