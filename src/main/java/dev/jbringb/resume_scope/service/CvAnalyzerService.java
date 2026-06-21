@@ -53,7 +53,6 @@ public class CvAnalyzerService {
             var candidates = candidateRepo.findByJobRoleId(jobRoleId);
             for (var candidate : candidates) {
                 var cvText = candidate.getCvText() == null ? "" : candidate.getCvText();
-                log.info("CV text: {}", cvText);
                 var ai = analyzeWithLlm(role, candidate, cvText);
                 var score = Math.clamp(ai.overallScore(), 0, 100);
                 analysisRepo.insert(
