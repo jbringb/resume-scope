@@ -1,7 +1,6 @@
 package dev.jbringb.resume_scope.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -21,10 +20,8 @@ import dev.jbringb.resume_scope.repository.AnalysisTriggerIdempotencyRepository;
 import dev.jbringb.resume_scope.repository.CandidateRepository;
 import dev.jbringb.resume_scope.repository.JobRoleRepository;
 import java.time.OffsetDateTime;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -33,6 +30,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 @ExtendWith(MockitoExtension.class)
 class AnalysisServiceTest {
@@ -65,75 +65,79 @@ class AnalysisServiceTest {
     AnalysisService analysisSvc;
 
     @BeforeEach
-    void stubIdempotencyLock() {
+    void stubCommon() {
+        // Lock is a passthrough: run the supplied action Mono directly.
         lenient()
                 .when(analysisTriggerIdempotencyLock.withJobRoleKeyLock(any(), any(), any()))
-                .thenAnswer(invocation -> ((Supplier<?>) invocation.getArgument(2)).get());
+                .thenAnswer(inv -> inv.getArgument(2));
+        // Background processing is fire-and-forget; return an empty Mono so dispatch is a no-op.
+        lenient().when(cvAnalyzerSvc.processAnalysisRun(any())).thenReturn(Mono.empty());
     }
 
     @Test
     void triggerAnalysis_whenRoleNotFound_throws404() {
         var id = UUID.randomUUID();
-        when(jobRoleRepo.findById(id)).thenReturn(Optional.empty());
+        when(jobRoleRepo.findById(id)).thenReturn(Mono.empty());
 
-        assertThatThrownBy(() -> analysisSvc.triggerAnalysis(id, Optional.empty()))
-                .isInstanceOf(ResponseStatusException.class)
-                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
-                        .isEqualTo(HttpStatus.NOT_FOUND));
+        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.empty()))
+                .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
     }
 
     @Test
     void triggerAnalysis_whenNoCandidates_throws400() {
         var id = UUID.randomUUID();
-        when(jobRoleRepo.findById(id)).thenReturn(Optional.of(new JobRoleRecord()));
-        when(candidateRepo.findByJobRoleId(id)).thenReturn(List.of());
+        when(jobRoleRepo.findById(id)).thenReturn(Mono.just(new JobRoleRecord()));
+        when(candidateRepo.findByJobRoleId(id)).thenReturn(Flux.empty());
 
-        assertThatThrownBy(() -> analysisSvc.triggerAnalysis(id, Optional.empty()))
-                .isInstanceOf(ResponseStatusException.class)
-                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
-                        .isEqualTo(HttpStatus.BAD_REQUEST));
+        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.empty()))
+                .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
     }
 
     @Test
     void triggerAnalysis_createsRunAndSchedulesProcessing() {
         var jobRoleId = UUID.randomUUID();
         var runId = UUID.randomUUID();
-        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Optional.of(new JobRoleRecord()));
-        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(List.of(new CandidateRecord()));
+        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Mono.just(new JobRoleRecord()));
+        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(Flux.just(new CandidateRecord()));
 
         var run = new AnalysisRunRecord();
         run.setId(runId);
-        when(analysisRunRepo.insertPending(jobRoleId)).thenReturn(run);
+        when(analysisRunRepo.insertPending(jobRoleId)).thenReturn(Mono.just(run));
 
-        var response = analysisSvc.triggerAnalysis(jobRoleId, Optional.empty());
+        StepVerifier.create(analysisSvc.triggerAnalysis(jobRoleId, Optional.empty()))
+                .assertNext(response -> assertThat(response.runId()).isEqualTo(runId))
+                .verifyComplete();
 
-        assertThat(response.runId()).isEqualTo(runId);
-        verify(cvAnalyzerSvc).processAnalysisRunAsync(runId);
+        verify(cvAnalyzerSvc).processAnalysisRun(runId);
     }
 
     @Test
     void triggerAnalysis_whenBlankIdempotencyKey_throws400() {
         var id = UUID.randomUUID();
-        when(jobRoleRepo.findById(id)).thenReturn(Optional.of(new JobRoleRecord()));
-        when(candidateRepo.findByJobRoleId(id)).thenReturn(List.of(new CandidateRecord()));
+        when(jobRoleRepo.findById(id)).thenReturn(Mono.just(new JobRoleRecord()));
+        when(candidateRepo.findByJobRoleId(id)).thenReturn(Flux.just(new CandidateRecord()));
 
-        assertThatThrownBy(() -> analysisSvc.triggerAnalysis(id, Optional.of("   ")))
-                .isInstanceOf(ResponseStatusException.class)
-                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
-                        .isEqualTo(HttpStatus.BAD_REQUEST));
+        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.of("   ")))
+                .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
         verify(analysisTriggerIdempotencyLock, never()).withJobRoleKeyLock(any(), any(), any());
     }
 
     @Test
     void triggerAnalysis_whenIdempotencyKeyTooLong_throws400() {
         var id = UUID.randomUUID();
-        when(jobRoleRepo.findById(id)).thenReturn(Optional.of(new JobRoleRecord()));
-        when(candidateRepo.findByJobRoleId(id)).thenReturn(List.of(new CandidateRecord()));
+        when(jobRoleRepo.findById(id)).thenReturn(Mono.just(new JobRoleRecord()));
+        when(candidateRepo.findByJobRoleId(id)).thenReturn(Flux.just(new CandidateRecord()));
 
-        assertThatThrownBy(() -> analysisSvc.triggerAnalysis(id, Optional.of("x".repeat(256))))
-                .isInstanceOf(ResponseStatusException.class)
-                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
-                        .isEqualTo(HttpStatus.BAD_REQUEST));
+        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.of("x".repeat(256))))
+                .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.BAD_REQUEST))
+                .verify();
     }
 
     @Test
@@ -141,27 +145,28 @@ class AnalysisServiceTest {
         var jobRoleId = UUID.randomUUID();
         var runId = UUID.randomUUID();
         var key = "idem-1";
-        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Optional.of(new JobRoleRecord()));
-        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(List.of(new CandidateRecord()));
+        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Mono.just(new JobRoleRecord()));
+        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(Flux.just(new CandidateRecord()));
         when(analysisTriggerIdempotencyRepo.findAnalysisRunId(jobRoleId, key))
-                .thenReturn(Optional.empty())
-                .thenReturn(Optional.of(runId));
+                .thenReturn(Mono.empty())
+                .thenReturn(Mono.just(runId));
 
         var run = new AnalysisRunRecord();
         run.setId(runId);
         run.setStatus("PENDING");
         run.setTriggeredAt(OffsetDateTime.now());
-        when(analysisRunRepo.insertPending(jobRoleId)).thenReturn(run);
+        when(analysisRunRepo.insertPending(jobRoleId)).thenReturn(Mono.just(run));
         // Replay only happens while the existing run is still active (recent, non-terminal).
-        when(analysisRunRepo.findById(runId)).thenReturn(Optional.of(run));
+        when(analysisRunRepo.findById(runId)).thenReturn(Mono.just(run));
+        when(analysisTriggerIdempotencyRepo.insert(jobRoleId, key, runId)).thenReturn(Mono.empty());
 
-        var first = analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key));
-        var second = analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key));
+        var first = analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key)).block();
+        var second = analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key)).block();
 
         assertThat(first.runId()).isEqualTo(runId);
         assertThat(second.runId()).isEqualTo(runId);
         verify(analysisRunRepo, times(1)).insertPending(jobRoleId);
-        verify(cvAnalyzerSvc, times(1)).processAnalysisRunAsync(runId);
+        verify(cvAnalyzerSvc, times(1)).processAnalysisRun(runId);
         verify(analysisTriggerIdempotencyRepo).insert(jobRoleId, key, runId);
     }
 
@@ -171,26 +176,30 @@ class AnalysisServiceTest {
         var oldRunId = UUID.randomUUID();
         var newRunId = UUID.randomUUID();
         var key = "idem-expired";
-        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Optional.of(new JobRoleRecord()));
-        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(List.of(new CandidateRecord()));
-        when(analysisTriggerIdempotencyRepo.findAnalysisRunId(jobRoleId, key)).thenReturn(Optional.of(oldRunId));
+        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Mono.just(new JobRoleRecord()));
+        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(Flux.just(new CandidateRecord()));
+        when(analysisTriggerIdempotencyRepo.findAnalysisRunId(jobRoleId, key)).thenReturn(Mono.just(oldRunId));
 
         var staleRun = new AnalysisRunRecord();
         staleRun.setId(oldRunId);
         staleRun.setStatus("PENDING");
         staleRun.setTriggeredAt(OffsetDateTime.now().minusMinutes(20));
-        when(analysisRunRepo.findById(oldRunId)).thenReturn(Optional.of(staleRun));
+        when(analysisRunRepo.findById(oldRunId)).thenReturn(Mono.just(staleRun));
+        when(analysisRunRepo.updateStatus(eq(oldRunId), eq("FAILED"), any(), anyString()))
+                .thenReturn(Mono.empty());
 
         var newRun = new AnalysisRunRecord();
         newRun.setId(newRunId);
-        when(analysisRunRepo.insertPending(jobRoleId)).thenReturn(newRun);
+        when(analysisRunRepo.insertPending(jobRoleId)).thenReturn(Mono.just(newRun));
+        when(analysisTriggerIdempotencyRepo.repoint(jobRoleId, key, newRunId)).thenReturn(Mono.empty());
 
-        var response = analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key));
+        StepVerifier.create(analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key)))
+                .assertNext(response -> assertThat(response.runId()).isEqualTo(newRunId))
+                .verifyComplete();
 
-        assertThat(response.runId()).isEqualTo(newRunId);
         verify(analysisRunRepo).updateStatus(eq(oldRunId), eq("FAILED"), any(OffsetDateTime.class), anyString());
         verify(analysisTriggerIdempotencyRepo).repoint(jobRoleId, key, newRunId);
-        verify(cvAnalyzerSvc).processAnalysisRunAsync(newRunId);
+        verify(cvAnalyzerSvc).processAnalysisRun(newRunId);
         verify(analysisTriggerIdempotencyRepo, never()).insert(any(), any(), any());
     }
 
@@ -202,45 +211,48 @@ class AnalysisServiceTest {
         staleRun.setJobRoleId(UUID.randomUUID());
         staleRun.setStatus("PENDING");
         staleRun.setTriggeredAt(OffsetDateTime.now().minusMinutes(20));
-        when(analysisRunRepo.findById(runId)).thenReturn(Optional.of(staleRun));
+        when(analysisRunRepo.findById(runId)).thenReturn(Mono.just(staleRun));
+        when(analysisRunRepo.updateStatus(eq(runId), eq("FAILED"), any(), anyString()))
+                .thenReturn(Mono.empty());
 
-        var response = analysisSvc.getRun(runId);
+        StepVerifier.create(analysisSvc.getRun(runId))
+                .assertNext(response -> assertThat(response.status()).isEqualTo("FAILED"))
+                .verifyComplete();
 
-        assertThat(response.status()).isEqualTo("FAILED");
         verify(analysisRunRepo).updateStatus(eq(runId), eq("FAILED"), any(OffsetDateTime.class), anyString());
     }
 
     @Test
     void listRuns_whenRoleNotFound_throws404() {
         var id = UUID.randomUUID();
-        when(jobRoleRepo.findById(id)).thenReturn(Optional.empty());
+        when(jobRoleRepo.findById(id)).thenReturn(Mono.empty());
 
-        assertThatThrownBy(() -> analysisSvc.listRuns(id))
-                .isInstanceOf(ResponseStatusException.class)
-                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
-                        .isEqualTo(HttpStatus.NOT_FOUND));
+        StepVerifier.create(analysisSvc.listRuns(id))
+                .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
     }
 
     @Test
     void latestResults_whenNoCompletedRun_throws404() {
         var id = UUID.randomUUID();
-        when(jobRoleRepo.findById(id)).thenReturn(Optional.of(new JobRoleRecord()));
-        when(analysisRunRepo.findLatestCompletedByJobRoleId(id)).thenReturn(Optional.empty());
+        when(jobRoleRepo.findById(id)).thenReturn(Mono.just(new JobRoleRecord()));
+        when(analysisRunRepo.findLatestCompletedByJobRoleId(id)).thenReturn(Mono.empty());
 
-        assertThatThrownBy(() -> analysisSvc.latestResultsForJobRole(id))
-                .isInstanceOf(ResponseStatusException.class)
-                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
-                        .isEqualTo(HttpStatus.NOT_FOUND));
+        StepVerifier.create(analysisSvc.latestResultsForJobRole(id))
+                .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
     }
 
     @Test
     void getRun_whenNotFound_throws404() {
         var id = UUID.randomUUID();
-        when(analysisRunRepo.findById(id)).thenReturn(Optional.empty());
+        when(analysisRunRepo.findById(id)).thenReturn(Mono.empty());
 
-        assertThatThrownBy(() -> analysisSvc.getRun(id))
-                .isInstanceOf(ResponseStatusException.class)
-                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
-                        .isEqualTo(HttpStatus.NOT_FOUND));
+        StepVerifier.create(analysisSvc.getRun(id))
+                .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND))
+                .verify();
     }
 }

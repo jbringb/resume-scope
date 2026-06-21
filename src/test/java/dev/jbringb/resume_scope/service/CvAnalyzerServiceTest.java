@@ -22,8 +22,6 @@ import dev.jbringb.resume_scope.repository.AnalysisRunRepository;
 import dev.jbringb.resume_scope.repository.CandidateRepository;
 import dev.jbringb.resume_scope.repository.JobRoleRepository;
 import java.time.OffsetDateTime;
-import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,6 +29,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.client.ChatClient;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 @ExtendWith(MockitoExtension.class)
 class CvAnalyzerServiceTest {
@@ -62,23 +62,25 @@ class CvAnalyzerServiceTest {
     }
 
     @Test
-    void processAnalysisRunAsync_whenRunNotFound_doesNothing() {
+    void processAnalysisRun_whenRunNotFound_doesNothing() {
         var runId = UUID.randomUUID();
-        when(analysisRunRepo.findById(runId)).thenReturn(Optional.empty());
+        when(analysisRunRepo.findById(runId)).thenReturn(Mono.empty());
 
-        cvAnalyzerSvc.processAnalysisRunAsync(runId);
+        cvAnalyzerSvc.processAnalysisRun(runId).block();
 
         verifyNoInteractions(jobRoleRepo, candidateRepo, analysisRepo, chatClient);
     }
 
     @Test
-    void processAnalysisRunAsync_whenRoleNotFound_marksRunFailed() {
+    void processAnalysisRun_whenRoleNotFound_marksRunFailed() {
         var runId = UUID.randomUUID();
         var jobRoleId = UUID.randomUUID();
-        when(analysisRunRepo.findById(runId)).thenReturn(Optional.of(pendingRun(runId, jobRoleId)));
-        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Optional.empty());
+        when(analysisRunRepo.findById(runId)).thenReturn(Mono.just(pendingRun(runId, jobRoleId)));
+        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Mono.empty());
+        when(analysisRunRepo.updateStatus(eq(runId), eq("FAILED"), any(), eq("Job role not found")))
+                .thenReturn(Mono.empty());
 
-        cvAnalyzerSvc.processAnalysisRunAsync(runId);
+        cvAnalyzerSvc.processAnalysisRun(runId).block();
 
         verify(analysisRunRepo)
                 .updateStatus(eq(runId), eq("FAILED"), any(OffsetDateTime.class), eq("Job role not found"));
@@ -86,28 +88,32 @@ class CvAnalyzerServiceTest {
     }
 
     @Test
-    void processAnalysisRunAsync_assignsRanksOneBasedByScoreDescending() {
+    void processAnalysisRun_assignsRanksOneBasedByScoreDescending() {
         var runId = UUID.randomUUID();
         var jobRoleId = UUID.randomUUID();
-        when(analysisRunRepo.findById(runId)).thenReturn(Optional.of(pendingRun(runId, jobRoleId)));
-        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Optional.of(jobRole(jobRoleId, "Engineer")));
+        when(analysisRunRepo.findById(runId)).thenReturn(Mono.just(pendingRun(runId, jobRoleId)));
+        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Mono.just(jobRole(jobRoleId, "Engineer")));
+        when(analysisRunRepo.updateStatusOnly(runId, "RUNNING")).thenReturn(Mono.empty());
 
         var cand1 = candidate();
         var cand2 = candidate();
-        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(List.of(cand1, cand2));
+        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(Flux.just(cand1, cand2));
 
         stubLlmResponse(cvJson(90, "Alice", "alice@example.com"), cvJson(70, "Bob", "bob@example.com"));
 
         var aliceAnalysisId = UUID.randomUUID();
         var bobAnalysisId = UUID.randomUUID();
         when(analysisRepo.insert(any(), any(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(aliceAnalysisId, bobAnalysisId);
+                .thenReturn(Mono.just(aliceAnalysisId), Mono.just(bobAnalysisId));
+        when(analysisRepo.updateRank(any(), anyInt())).thenReturn(Mono.empty());
 
         // score-ordered return: alice (90) -> rank 1, bob (70) -> rank 2
         when(analysisRepo.findByAnalysisRunIdOrderByScoreDesc(runId))
-                .thenReturn(List.of(analysisRecord(aliceAnalysisId), analysisRecord(bobAnalysisId)));
+                .thenReturn(Flux.just(analysisRecord(aliceAnalysisId), analysisRecord(bobAnalysisId)));
+        when(analysisRunRepo.updateStatus(eq(runId), eq("COMPLETED"), any(), isNull()))
+                .thenReturn(Mono.empty());
 
-        cvAnalyzerSvc.processAnalysisRunAsync(runId);
+        cvAnalyzerSvc.processAnalysisRun(runId).block();
 
         var order = inOrder(analysisRepo);
         order.verify(analysisRepo).updateRank(aliceAnalysisId, 1);
@@ -116,21 +122,25 @@ class CvAnalyzerServiceTest {
     }
 
     @Test
-    void processAnalysisRunAsync_clampsScoreAboveHundred() {
+    void processAnalysisRun_clampsScoreAboveHundred() {
         var runId = UUID.randomUUID();
         var jobRoleId = UUID.randomUUID();
-        when(analysisRunRepo.findById(runId)).thenReturn(Optional.of(pendingRun(runId, jobRoleId)));
-        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Optional.of(jobRole(jobRoleId, "Engineer")));
-        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(List.of(candidate()));
+        when(analysisRunRepo.findById(runId)).thenReturn(Mono.just(pendingRun(runId, jobRoleId)));
+        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Mono.just(jobRole(jobRoleId, "Engineer")));
+        when(analysisRunRepo.updateStatusOnly(runId, "RUNNING")).thenReturn(Mono.empty());
+        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(Flux.just(candidate()));
 
         stubLlmResponse(cvJson(150, "Alice", null));
 
         var analysisId = UUID.randomUUID();
         when(analysisRepo.insert(any(), any(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(analysisId);
-        when(analysisRepo.findByAnalysisRunIdOrderByScoreDesc(runId)).thenReturn(List.of(analysisRecord(analysisId)));
+                .thenReturn(Mono.just(analysisId));
+        when(analysisRepo.updateRank(any(), anyInt())).thenReturn(Mono.empty());
+        when(analysisRepo.findByAnalysisRunIdOrderByScoreDesc(runId)).thenReturn(Flux.just(analysisRecord(analysisId)));
+        when(analysisRunRepo.updateStatus(eq(runId), eq("COMPLETED"), any(), isNull()))
+                .thenReturn(Mono.empty());
 
-        cvAnalyzerSvc.processAnalysisRunAsync(runId);
+        cvAnalyzerSvc.processAnalysisRun(runId).block();
 
         // score 150 must be clamped to 100 before insertion
         verify(analysisRepo).insert(any(), any(), eq(100), any(), any(), any(), any(), any(), any(), any());

@@ -9,7 +9,9 @@ AI-powered CV analysis platform built with **Spring Boot 4**, **Spring AI**, **j
 
 Administrators upload PDF CVs connected to job roles. The AI analyses each CV, ranks candidates, and highlights strengths and weaknesses against the role requirements.
 
-The analysis runs **asynchronously**: triggering an analysis returns `202 Accepted` with a run ID, a background worker scores every candidate against the role via the LLM, candidates are ranked by descending score, and the client polls the run for results.
+The analysis runs **asynchronously**: triggering an analysis returns `202 Accepted` with a run ID, a background worker scores every candidate against the role via the LLM, candidates are ranked by descending score, and the client polls the run — or subscribes to a live **Server-Sent Events** stream — for status and results.
+
+The stack is **reactive end-to-end**: Spring WebFlux on top of jOOQ executed over **R2DBC** (non-blocking SQL), with Flyway running migrations over a JDBC connection at startup. Genuinely blocking work (the LLM call, PDF parsing) is offloaded to a bounded scheduler.
 
 ---
 
@@ -17,9 +19,9 @@ The analysis runs **asynchronously**: triggering an analysis returns `202 Accept
 
 | Layer        | Technology                                |
 |--------------|-------------------------------------------|
-| Backend      | Spring Boot 4.0.4 · WebFlux · Java 25    |
+| Backend      | Spring Boot 4.0.4 · WebFlux (reactive) · Java 25 |
 | AI           | Spring AI 2.0 · OpenAI-compatible (hosted or local vLLM) |
-| Database     | PostgreSQL 17 · jOOQ 3.19 · Flyway 11   |
+| Database     | PostgreSQL 17 · jOOQ 3.19 over **R2DBC** (non-blocking) · Flyway 11 (JDBC) |
 | PDF parsing  | Apache PDFBox 3.0.7                       |
 | Frontend     | Angular (separate — not yet built)        |
 
@@ -123,6 +125,13 @@ curl -X POST http://localhost:8086/api/job-roles/{id}/candidates \
 | GET    | `/api/job-roles/{id}/results`               | Get ranked results from latest completed run          |
 | GET    | `/api/analysis-runs/{runId}`                | Poll status of a specific run                         |
 | GET    | `/api/analysis-runs/{runId}/results`        | Get all results for a specific run                    |
+| GET    | `/api/analysis-runs/{runId}/events`         | **SSE** live run-status stream (closes on terminal status) |
+
+**Live updates (SSE):** instead of polling `GET /api/analysis-runs/{runId}`, subscribe to the event stream — it pushes the current state immediately, then each status transition, and closes when the run is `COMPLETED`/`FAILED`:
+
+```bash
+curl -N -H "X-API-Key: $API_KEY" http://localhost:8086/api/analysis-runs/{runId}/events
+```
 
 **Analysis run status values:** `PENDING` → `RUNNING` → `COMPLETED` | `FAILED`
 
@@ -257,6 +266,11 @@ OPENAI_API_KEY=sk-... ./gradlew bootRun
 Code is formatted with [Spotless](https://github.com/diffplug/spotless) using Palantir Java Format; the jOOQ-generated `db/generated/**` package is excluded (regenerate it instead of formatting). Run `./gradlew spotlessApply` before committing — CI enforces `spotlessCheck`.
 
 Every push and pull request runs the [**CI** workflow](.github/workflows/ci.yml) (format check → tests → build) and the [**CodeQL** security scan](.github/workflows/codeql.yml).
+
+## Known limitations
+
+- **SSE is single-instance.** The run-status event bus is an in-memory reactive sink, so a client's SSE stream only sees events from the instance that is processing that run. Behind more than one replica, subscribe to the instance running the analysis or fall back to polling. Cross-instance fan-out (e.g. Postgres `LISTEN/NOTIFY` or Redis) is the scale-out path and is intentionally out of scope.
+- **Prompt-injection surface.** CV text is passed to the LLM verbatim, so a crafted résumé could attempt to influence its own score. Treat scores as advisory.
 
 ## AI-assisted development
 

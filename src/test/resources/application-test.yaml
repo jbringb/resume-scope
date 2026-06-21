@@ -4,3 +4,4 @@ spring:
       - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
       - org.springframework.boot.jooq.autoconfigure.JooqAutoConfiguration
       - org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration
+      - org.springframework.boot.r2dbc.autoconfigure.R2dbcAutoConfiguration
