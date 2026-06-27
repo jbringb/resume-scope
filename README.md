@@ -297,7 +297,7 @@ In local mode the script also builds and starts the Docker stack, then tears it 
 ## Known limitations
 
 - **SSE is single-instance.** The run-status event bus is an in-memory reactive sink, so a client's SSE stream only sees events from the instance that is processing that run. Behind more than one replica, subscribe to the instance running the analysis or fall back to polling. Cross-instance fan-out (e.g. Postgres `LISTEN/NOTIFY` or Redis) is the scale-out path and is intentionally out of scope.
-- **Prompt-injection surface.** CV text is passed to the LLM verbatim, so a crafted résumé could attempt to influence its own score. Treat scores as advisory.
+- **Prompt-injection surface.** A crafted résumé could try to influence its own score. This is mitigated as defense-in-depth — the CV is sent as **untrusted data** inside an unpredictable per-request delimiter, with an instruction never to obey text within it, and obvious manipulation attempts are logged — but not eliminated. Treat scores as advisory.
 
 ## AI-assisted development
 
