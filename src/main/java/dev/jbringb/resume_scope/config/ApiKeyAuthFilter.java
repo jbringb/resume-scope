@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ServerWebExchange;
@@ -48,7 +49,18 @@ public class ApiKeyAuthFilter implements WebFilter {
         if (provided != null && MessageDigest.isEqual(expectedKey, provided.getBytes(StandardCharsets.UTF_8))) {
             return chain.filter(exchange);
         }
-        exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
-        return exchange.getResponse().setComplete();
+        return unauthorized(exchange);
+    }
+
+    // Runs before the dispatcher, so the @RestControllerAdvice can't reach it — emit an RFC 7807
+    // problem+json body here directly so every error path stays consistent.
+    private Mono<Void> unauthorized(ServerWebExchange exchange) {
+        var response = exchange.getResponse();
+        response.setStatusCode(HttpStatus.UNAUTHORIZED);
+        response.getHeaders().setContentType(MediaType.APPLICATION_PROBLEM_JSON);
+        byte[] body = ("{\"type\":\"https://resume-scope.dev/errors/unauthorized\",\"title\":\"Unauthorized\","
+                        + "\"status\":401,\"detail\":\"Missing or invalid API key.\"}")
+                .getBytes(StandardCharsets.UTF_8);
+        return response.writeWith(Mono.just(response.bufferFactory().wrap(body)));
     }
 }

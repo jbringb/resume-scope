@@ -120,6 +120,47 @@ class AnalysisFlowIntegrationTest {
                 .isEqualTo(1);
     }
 
+    @Test
+    void validationFailure_returnsProblemJsonWithFieldErrors() {
+        web.post()
+                .uri("/api/job-roles")
+                .bodyValue(new java.util.LinkedHashMap<>() {
+                    {
+                        put("title", "  "); // blank — violates @NotBlank
+                        put("description", "x");
+                        put("requirements", "y");
+                    }
+                })
+                .exchange()
+                .expectStatus()
+                .isBadRequest()
+                .expectHeader()
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .expectBody()
+                .jsonPath("$.title")
+                .isEqualTo("Validation failed")
+                .jsonPath("$.status")
+                .isEqualTo(400)
+                .jsonPath("$.errors[0].field")
+                .isEqualTo("title");
+    }
+
+    @Test
+    void unknownRole_returnsProblemJsonNotFound() {
+        web.get()
+                .uri("/api/job-roles/{id}", UUID.randomUUID())
+                .exchange()
+                .expectStatus()
+                .isNotFound()
+                .expectHeader()
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .expectBody()
+                .jsonPath("$.status")
+                .isEqualTo(404)
+                .jsonPath("$.detail")
+                .isEqualTo("Job role not found");
+    }
+
     private UUID createJobRole() {
         JobRoleResponse role = web.post()
                 .uri("/api/job-roles")

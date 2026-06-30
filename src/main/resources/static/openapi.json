@@ -503,15 +503,26 @@
           }
         }
       },
-      "SpringErrorBody": {
+      "ProblemDetail": {
         "type": "object",
-        "description": "Typical Spring Boot default error JSON (fields may vary by version).",
+        "description": "RFC 7807 problem detail (application/problem+json). Returned for every error.",
         "properties": {
-          "timestamp": { "type": "string", "format": "date-time" },
+          "type": { "type": "string", "format": "uri", "description": "Stable URI identifying the error class." },
+          "title": { "type": "string" },
           "status": { "type": "integer" },
-          "error": { "type": "string" },
-          "message": { "type": "string" },
-          "path": { "type": "string" }
+          "detail": { "type": "string" },
+          "instance": { "type": "string", "format": "uri", "description": "The request path that produced the error." },
+          "errors": {
+            "type": "array",
+            "description": "Present on 400 validation failures: the fields that failed and why.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": { "type": "string" },
+                "message": { "type": "string" }
+              }
+            }
+          }
         }
       }
     },
@@ -519,16 +530,32 @@
       "NotFound": {
         "description": "Resource not found (e.g. unknown id or no completed analysis yet).",
         "content": {
-          "application/json": {
-            "schema": { "$ref": "#/components/schemas/SpringErrorBody" }
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/ProblemDetail" }
           }
         }
       },
       "BadRequest": {
-        "description": "Invalid request (e.g. no PDF, no candidates to analyze).",
+        "description": "Invalid request (e.g. no PDF, no candidates to analyze, or bean-validation failure with field-level errors).",
         "content": {
-          "application/json": {
-            "schema": { "$ref": "#/components/schemas/SpringErrorBody" }
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/ProblemDetail" }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Missing or invalid X-API-Key (only when the server has API_KEY set).",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/ProblemDetail" }
+          }
+        }
+      },
+      "InternalServerError": {
+        "description": "Unexpected server error. The body carries a generic message; the cause is logged server-side only.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/ProblemDetail" }
           }
         }
       }

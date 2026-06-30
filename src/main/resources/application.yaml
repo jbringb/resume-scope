@@ -13,6 +13,12 @@ spring:
   jooq:
     sql-dialect: postgres
 
+  # Render errors as RFC 7807 application/problem+json. The GlobalExceptionHandler
+  # extends this for validation field errors and unexpected failures.
+  webflux:
+    problemdetails:
+      enabled: true
+
   flyway:
     enabled:   true
     locations: classpath:db/migration
