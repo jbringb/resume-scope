@@ -42,3 +42,6 @@ out/
 
 ### Smoke test secrets and generated artefacts ###
 smoke_test/.env
+
+### Local, account-specific deploy helpers (not for the public repo) ###
+deploy/aws/local/

@@ -80,16 +80,36 @@ curl -H "X-API-Key: <API_KEY>" https://resume-scope.ecs.<REGION>.on.aws/api/job-
 
 ## Teardown
 
-Delete the stack to remove everything (it also empties and removes the ECR repo and the RDS instance):
+The Fargate task and the Express ALB are the only things billed continuously, so the usual "stop paying between demos" move is to delete just the service and redeploy later with one workflow run. [`teardown.sh`](teardown.sh) does this:
 
 ```bash
-aws cloudformation delete-stack --stack-name resume-scope --region <REGION>
+./deploy/aws/teardown.sh          # delete the ECS Express service (Fargate + ALB) — keeps RDS/ECR/IAM/SSM
+./deploy/aws/teardown.sh --full   # also delete the CloudFormation stack (RDS + its data, ECR, IAM) and SSM params → ~$0
+./deploy/aws/teardown.sh -y       # skip the confirmation prompts
 ```
 
-To also remove the SSM parameters:
+Redeploy by re-running the **Deploy · AWS (ECS Express)** workflow. After `--full`, first recreate the service-linked role (step 1) and the SSM parameters (step 3).
+
+The equivalent raw commands, if you'd rather run them by hand:
 
 ```bash
+aws ecs delete-express-gateway-service \
+  --service-arn arn:aws:ecs:<REGION>:<ACCOUNT_ID>:service/default/resume-scope --region <REGION>
+# full teardown:
+aws cloudformation delete-stack --stack-name resume-scope --region <REGION>
 aws ssm delete-parameter --region <REGION> --name "/resume-scope/openai_api_key"
 aws ssm delete-parameter --region <REGION> --name "/resume-scope/api_key"
 aws ssm delete-parameter --region <REGION> --name "/resume-scope/db_password"
 ```
+
+## Cost guardrail
+
+Set a monthly AWS **cost budget** that emails you as spend approaches a cap. AWS budgets **alert**, they don't hard-stop services — there's no native switch that pauses billing at a number, so treat the alert as your cue to run `teardown.sh`. (A true auto-stop needs a Budget *Action* that applies a deny policy — more invasive, not set up here.)
+
+```bash
+aws budgets create-budget --account-id <ACCOUNT_ID> \
+  --budget '{"BudgetName":"resume-scope-monthly-cap","BudgetLimit":{"Amount":"10","Unit":"USD"},"TimeUnit":"MONTHLY","BudgetType":"COST"}' \
+  --notifications-with-subscribers '[{"Notification":{"NotificationType":"ACTUAL","ComparisonOperator":"GREATER_THAN","Threshold":100,"ThresholdType":"PERCENTAGE"},"Subscribers":[{"SubscriptionType":"EMAIL","Address":"you@example.com"}]}]'
+```
+
+> A ready-to-run helper lives at `deploy/aws/local/set-budget.sh` (gitignored — it's account-specific): `BUDGET_EMAIL=you@example.com ./deploy/aws/local/set-budget.sh`.
