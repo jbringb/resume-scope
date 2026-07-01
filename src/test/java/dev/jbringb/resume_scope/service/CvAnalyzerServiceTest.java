@@ -5,7 +5,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -23,6 +22,7 @@ import dev.jbringb.resume_scope.repository.AnalysisRunRepository;
 import dev.jbringb.resume_scope.repository.CandidateRepository;
 import dev.jbringb.resume_scope.repository.JobRoleRepository;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,6 +30,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -60,6 +64,8 @@ class CvAnalyzerServiceTest {
     void setUp() {
         cvAnalyzerSvc = new CvAnalyzerService(
                 chatClient, new ObjectMapper(), jobRoleRepo, candidateRepo, analysisRunRepo, analysisRepo, eventBus);
+        ReflectionTestUtils.setField(cvAnalyzerSvc, "eurPer1kPromptTokens", new java.math.BigDecimal("0.00014"));
+        ReflectionTestUtils.setField(cvAnalyzerSvc, "eurPer1kCompletionTokens", new java.math.BigDecimal("0.00055"));
     }
 
     @Test
@@ -111,7 +117,7 @@ class CvAnalyzerServiceTest {
         // score-ordered return: alice (90) -> rank 1, bob (70) -> rank 2
         when(analysisRepo.findByAnalysisRunIdOrderByScoreDesc(runId))
                 .thenReturn(Flux.just(analysisRecord(aliceAnalysisId), analysisRecord(bobAnalysisId)));
-        when(analysisRunRepo.updateStatus(eq(runId), eq("COMPLETED"), any(), isNull()))
+        when(analysisRunRepo.completeWithUsage(eq(runId), any(), anyInt(), anyInt(), any()))
                 .thenReturn(Mono.empty());
 
         cvAnalyzerSvc.processAnalysisRun(runId).block();
@@ -119,7 +125,7 @@ class CvAnalyzerServiceTest {
         var order = inOrder(analysisRepo);
         order.verify(analysisRepo).updateRank(aliceAnalysisId, 1);
         order.verify(analysisRepo).updateRank(bobAnalysisId, 2);
-        verify(analysisRunRepo).updateStatus(eq(runId), eq("COMPLETED"), any(OffsetDateTime.class), isNull());
+        verify(analysisRunRepo).completeWithUsage(eq(runId), any(OffsetDateTime.class), anyInt(), anyInt(), any());
     }
 
     @Test
@@ -138,7 +144,7 @@ class CvAnalyzerServiceTest {
                 .thenReturn(Mono.just(analysisId));
         when(analysisRepo.updateRank(any(), anyInt())).thenReturn(Mono.empty());
         when(analysisRepo.findByAnalysisRunIdOrderByScoreDesc(runId)).thenReturn(Flux.just(analysisRecord(analysisId)));
-        when(analysisRunRepo.updateStatus(eq(runId), eq("COMPLETED"), any(), isNull()))
+        when(analysisRunRepo.completeWithUsage(eq(runId), any(), anyInt(), anyInt(), any()))
                 .thenReturn(Mono.empty());
 
         cvAnalyzerSvc.processAnalysisRun(runId).block();
@@ -165,7 +171,17 @@ class CvAnalyzerServiceTest {
         when(chatClient.prompt()).thenReturn(spec);
         when(spec.user(anyString())).thenReturn(spec);
         when(spec.call()).thenReturn(call);
-        when(call.content()).thenReturn(first, rest);
+        var responses = new ChatResponse[rest.length + 1];
+        responses[0] = chatResponseWith(first);
+        for (int i = 0; i < rest.length; i++) {
+            responses[i + 1] = chatResponseWith(rest[i]);
+        }
+        when(call.chatResponse())
+                .thenReturn(responses[0], java.util.Arrays.copyOfRange(responses, 1, responses.length));
+    }
+
+    private static ChatResponse chatResponseWith(String text) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
     }
 
     private static String cvJson(int score, String name, String email) {

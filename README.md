@@ -122,6 +122,9 @@ curl -X POST http://localhost:8086/api/job-roles/{id}/candidates \
 | GET    | `/api/analysis-runs/{runId}`                | Poll status of a specific run                         |
 | GET    | `/api/analysis-runs/{runId}/results`        | Get all results for a specific run                    |
 | GET    | `/api/analysis-runs/{runId}/events`         | **SSE** live run-status stream (closes on terminal status) |
+| GET    | `/api/usage/monthly`                        | Aggregated LLM token usage and estimated EUR cost for the current calendar month |
+
+**Cost tracking:** every completed run records the prompt/completion token counts and an estimated EUR cost (from Spring AI's usage metadata) on the `AnalysisRunResponse`. New analysis runs are rejected with `429` once this month's estimated spend reaches `analysis.cost.monthly-budget-eur` (default €5.00) — check current spend via `GET /api/usage/monthly`.
 
 **Live updates (SSE):** instead of polling `GET /api/analysis-runs/{runId}`, subscribe to the event stream — it pushes the current state immediately, then each status transition, and closes when the run is `COMPLETED`/`FAILED`:
 
@@ -164,6 +167,9 @@ All config lives in `src/main/resources/application.yaml`. Key environment varia
 | `OPENAI_BASE_URL`| Provider host (no `/v1` — Spring AI appends it). Override to use Groq / OpenRouter / vLLM. | `https://api.openai.com` |
 | `OPENAI_MODEL`   | Chat model id | `gpt-4o-mini` |
 | `API_KEY`        | Shared secret required on `/api/**` (sent as the `X-API-Key` header). Empty = auth disabled. | empty (open) |
+| `ANALYSIS_COST_EUR_PER_1K_PROMPT_TOKENS` | EUR price per 1,000 prompt tokens, for cost estimation | `0.00014` (approximates `gpt-4o-mini`) |
+| `ANALYSIS_COST_EUR_PER_1K_COMPLETION_TOKENS` | EUR price per 1,000 completion tokens, for cost estimation | `0.00055` (approximates `gpt-4o-mini`) |
+| `ANALYSIS_COST_MONTHLY_BUDGET_EUR` | Monthly estimated-cost cap; new analysis runs return `429` once reached | `5.00` |
 
 ### API authentication
 

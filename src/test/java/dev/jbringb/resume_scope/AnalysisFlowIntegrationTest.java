@@ -17,6 +17,9 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webtestclient.autoconfigure.AutoConfigureWebTestClient;
@@ -77,11 +80,12 @@ class AnalysisFlowIntegrationTest {
         when(chatClient.prompt()).thenReturn(spec);
         when(spec.user(anyString())).thenReturn(spec);
         when(spec.call()).thenReturn(call);
-        when(call.content())
-                .thenReturn(
-                        """
-                        {"overallScore":88,"strengths":["Java"],"weaknesses":[],"summary":"Strong","recommendation":"Hire","extractedName":"Alice","extractedEmail":"alice@example.com"}
-                        """);
+        var reply =
+                """
+                {"overallScore":88,"strengths":["Java"],"weaknesses":[],"summary":"Strong","recommendation":"Hire","extractedName":"Alice","extractedEmail":"alice@example.com"}
+                """;
+        when(call.chatResponse())
+                .thenReturn(new ChatResponse(java.util.List.of(new Generation(new AssistantMessage(reply)))));
     }
 
     @Test

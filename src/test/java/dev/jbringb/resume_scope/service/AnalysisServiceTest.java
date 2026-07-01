@@ -16,9 +16,11 @@ import dev.jbringb.resume_scope.db.generated.tables.records.CandidateRecord;
 import dev.jbringb.resume_scope.db.generated.tables.records.JobRoleRecord;
 import dev.jbringb.resume_scope.repository.AnalysisRepository;
 import dev.jbringb.resume_scope.repository.AnalysisRunRepository;
+import dev.jbringb.resume_scope.repository.AnalysisRunRepository.UsageTotals;
 import dev.jbringb.resume_scope.repository.AnalysisTriggerIdempotencyRepository;
 import dev.jbringb.resume_scope.repository.CandidateRepository;
 import dev.jbringb.resume_scope.repository.JobRoleRepository;
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
@@ -29,6 +31,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -66,12 +69,17 @@ class AnalysisServiceTest {
 
     @BeforeEach
     void stubCommon() {
+        ReflectionTestUtils.setField(analysisSvc, "monthlyBudgetEur", new BigDecimal("5.00"));
         // Lock is a passthrough: run the supplied action Mono directly.
         lenient()
                 .when(analysisTriggerIdempotencyLock.withJobRoleKeyLock(any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(2));
         // Background processing is fire-and-forget; return an empty Mono so dispatch is a no-op.
         lenient().when(cvAnalyzerSvc.processAnalysisRun(any())).thenReturn(Mono.empty());
+        // Under budget by default; individual tests override to exercise the 429 path.
+        lenient()
+                .when(analysisRunRepo.sumUsageSince(any()))
+                .thenReturn(Mono.just(new UsageTotals(0, 0, BigDecimal.ZERO)));
     }
 
     @Test
@@ -243,6 +251,38 @@ class AnalysisServiceTest {
                 .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
                         .isEqualTo(HttpStatus.NOT_FOUND))
                 .verify();
+    }
+
+    @Test
+    void triggerAnalysis_whenMonthlyBudgetExceeded_throws429() {
+        var id = UUID.randomUUID();
+        when(jobRoleRepo.findById(id)).thenReturn(Mono.just(new JobRoleRecord()));
+        when(candidateRepo.findByJobRoleId(id)).thenReturn(Flux.just(new CandidateRecord()));
+        when(analysisRunRepo.sumUsageSince(any()))
+                .thenReturn(Mono.just(new UsageTotals(1000, 1000, new BigDecimal("5.00"))));
+
+        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.empty()))
+                .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.TOO_MANY_REQUESTS))
+                .verify();
+        verify(analysisRunRepo, never()).insertPending(any());
+    }
+
+    @Test
+    void monthlyUsage_returnsAggregatedTotalsAndBudgetStatus() {
+        when(analysisRunRepo.sumUsageSince(any()))
+                .thenReturn(Mono.just(new UsageTotals(1000, 500, new BigDecimal("2.50"))));
+
+        StepVerifier.create(analysisSvc.monthlyUsage())
+                .assertNext(usage -> {
+                    assertThat(usage.promptTokens()).isEqualTo(1000);
+                    assertThat(usage.completionTokens()).isEqualTo(500);
+                    assertThat(usage.totalTokens()).isEqualTo(1500);
+                    assertThat(usage.estimatedCostEur()).isEqualByComparingTo("2.50");
+                    assertThat(usage.monthlyBudgetEur()).isEqualByComparingTo("5.00");
+                    assertThat(usage.budgetExceeded()).isFalse();
+                })
+                .verifyComplete();
     }
 
     @Test

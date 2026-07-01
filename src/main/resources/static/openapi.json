@@ -14,7 +14,8 @@
   "tags": [
     { "name": "Job roles", "description": "CRUD for job roles" },
     { "name": "Candidates", "description": "CVs attached to a job role" },
-    { "name": "Analysis", "description": "Trigger and read analysis runs and scored results" }
+    { "name": "Analysis", "description": "Trigger and read analysis runs and scored results" },
+    { "name": "Usage", "description": "LLM token usage and estimated cost accounting" }
   ],
   "paths": {
     "/api/job-roles": {
@@ -266,7 +267,8 @@
             }
           },
           "400": { "$ref": "#/components/responses/BadRequest" },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
         }
       }
     },
@@ -403,6 +405,23 @@
           "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
+    },
+    "/api/usage/monthly": {
+      "get": {
+        "tags": ["Usage"],
+        "summary": "Get aggregated LLM token usage and estimated cost for the current calendar month",
+        "operationId": "getMonthlyUsage",
+        "responses": {
+          "200": {
+            "description": "Current month's usage totals and budget status",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MonthlyUsageResponse" }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "security": [{ "ApiKeyAuth": [] }],
@@ -455,7 +474,23 @@
           "status": { "type": "string", "description": "e.g. PENDING, RUNNING, COMPLETED, FAILED" },
           "triggeredAt": { "type": "string", "format": "date-time" },
           "completedAt": { "type": "string", "format": "date-time", "nullable": true },
-          "errorMessage": { "type": "string", "nullable": true }
+          "errorMessage": { "type": "string", "nullable": true },
+          "promptTokens": { "type": "integer", "nullable": true, "description": "LLM prompt tokens used by this run; set once the run completes." },
+          "completionTokens": { "type": "integer", "nullable": true, "description": "LLM completion tokens used by this run; set once the run completes." },
+          "estimatedCostEur": { "type": "number", "format": "decimal", "nullable": true, "description": "Estimated LLM cost in EUR for this run, based on the configured per-1k-token pricing." }
+        }
+      },
+      "MonthlyUsageResponse": {
+        "type": "object",
+        "required": ["periodStart", "promptTokens", "completionTokens", "totalTokens", "estimatedCostEur", "monthlyBudgetEur", "budgetExceeded"],
+        "properties": {
+          "periodStart": { "type": "string", "format": "date-time", "description": "Start (UTC) of the current calendar month this usage covers." },
+          "promptTokens": { "type": "integer" },
+          "completionTokens": { "type": "integer" },
+          "totalTokens": { "type": "integer" },
+          "estimatedCostEur": { "type": "number", "format": "decimal" },
+          "monthlyBudgetEur": { "type": "number", "format": "decimal" },
+          "budgetExceeded": { "type": "boolean", "description": "True once this month's estimated cost has reached the budget; new analysis runs are rejected with 429 until the next month." }
         }
       },
       "TriggerAnalysisResponse": {
@@ -553,6 +588,14 @@
       },
       "InternalServerError": {
         "description": "Unexpected server error. The body carries a generic message; the cause is logged server-side only.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/ProblemDetail" }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "This month's estimated LLM cost has reached the configured monthly budget; no new analysis runs are accepted until next month.",
         "content": {
           "application/problem+json": {
             "schema": { "$ref": "#/components/schemas/ProblemDetail" }

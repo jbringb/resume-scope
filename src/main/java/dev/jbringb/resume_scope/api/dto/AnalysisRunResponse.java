@@ -1,5 +1,6 @@
 package dev.jbringb.resume_scope.api.dto;
 
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -9,4 +10,7 @@ public record AnalysisRunResponse(
         String status,
         OffsetDateTime triggeredAt,
         OffsetDateTime completedAt,
-        String errorMessage) {}
+        String errorMessage,
+        Integer promptTokens,
+        Integer completionTokens,
+        BigDecimal estimatedCostEur) {}

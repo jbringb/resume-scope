@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.jbringb.resume_scope.api.dto.AnalysisRunResponse;
 import dev.jbringb.resume_scope.api.dto.CandidateResultResponse;
 import dev.jbringb.resume_scope.api.dto.JobRoleResultsResponse;
+import dev.jbringb.resume_scope.api.dto.MonthlyUsageResponse;
 import dev.jbringb.resume_scope.api.dto.TriggerAnalysisResponse;
 import dev.jbringb.resume_scope.db.generated.tables.records.AnalysisRecord;
 import dev.jbringb.resume_scope.db.generated.tables.records.AnalysisRunRecord;
@@ -13,7 +14,10 @@ import dev.jbringb.resume_scope.repository.AnalysisRunRepository;
 import dev.jbringb.resume_scope.repository.AnalysisTriggerIdempotencyRepository;
 import dev.jbringb.resume_scope.repository.CandidateRepository;
 import dev.jbringb.resume_scope.repository.JobRoleRepository;
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -48,6 +52,10 @@ public class AnalysisService {
     // A run is considered expired this many minutes after it was triggered (see expireIfStale).
     @Value("${analysis.run-timeout-minutes:10}")
     private int runTimeoutMinutes = 10;
+
+    // New runs are rejected once this month's estimated LLM spend reaches the budget (see checkBudget).
+    @Value("${analysis.cost.monthly-budget-eur}")
+    private BigDecimal monthlyBudgetEur;
 
     public Mono<TriggerAnalysisResponse> triggerAnalysis(UUID jobRoleId, Optional<String> idempotencyKeyHeader) {
         log.info("Triggering analysis for job role {}", jobRoleId);
@@ -120,12 +128,42 @@ public class AnalysisService {
     }
 
     private Mono<TriggerAnalysisResponse> insertRunAndSchedule(UUID jobRoleId) {
-        return analysisRunRepo
-                .insertPending(jobRoleId)
+        return checkBudget()
+                .then(Mono.defer(() -> analysisRunRepo.insertPending(jobRoleId)))
                 .map(AnalysisRunRecord::getId)
                 .doOnNext(runId -> log.info("Analysis run inserted: {}", runId))
                 .doOnNext(this::dispatchProcessing)
                 .map(TriggerAnalysisResponse::new);
+    }
+
+    private Mono<Void> checkBudget() {
+        return analysisRunRepo.sumUsageSince(currentMonthStart()).flatMap(usage -> {
+            if (usage.estimatedCostEur().compareTo(monthlyBudgetEur) >= 0) {
+                return Mono.error(new ResponseStatusException(
+                        HttpStatus.TOO_MANY_REQUESTS,
+                        "Monthly LLM cost budget of €%s exceeded (spent €%s this month)"
+                                .formatted(monthlyBudgetEur, usage.estimatedCostEur())));
+            }
+            return Mono.empty();
+        });
+    }
+
+    public Mono<MonthlyUsageResponse> monthlyUsage() {
+        var periodStart = currentMonthStart();
+        return analysisRunRepo
+                .sumUsageSince(periodStart)
+                .map(usage -> new MonthlyUsageResponse(
+                        periodStart,
+                        usage.promptTokens(),
+                        usage.completionTokens(),
+                        usage.promptTokens() + usage.completionTokens(),
+                        usage.estimatedCostEur(),
+                        monthlyBudgetEur,
+                        usage.estimatedCostEur().compareTo(monthlyBudgetEur) >= 0));
+    }
+
+    private static OffsetDateTime currentMonthStart() {
+        return OffsetDateTime.now(ZoneOffset.UTC).withDayOfMonth(1).truncatedTo(ChronoUnit.DAYS);
     }
 
     // The PENDING insert auto-commits on its own connection, so by the time this fires the run is
@@ -201,7 +239,10 @@ public class AnalysisService {
                 r.getStatus(),
                 r.getTriggeredAt(),
                 r.getCompletedAt(),
-                r.getErrorMessage());
+                r.getErrorMessage(),
+                r.getPromptTokens(),
+                r.getCompletionTokens(),
+                r.getEstimatedCostEur());
     }
 
     private CandidateResultResponse toResultDto(AnalysisRecord a) {

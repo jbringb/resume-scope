@@ -60,6 +60,12 @@ analysis:
   # A run is considered expired this many minutes after it is triggered; an expired
   # PENDING/RUNNING run is failed lazily on access and its idempotency key starts a new run.
   run-timeout-minutes: ${ANALYSIS_RUN_TIMEOUT_MINUTES:10}
+  cost:
+    # Approximate EUR pricing for the configured model (gpt-4o-mini); override for other models/providers.
+    eur-per-1k-prompt-tokens:     ${ANALYSIS_COST_EUR_PER_1K_PROMPT_TOKENS:0.00014}
+    eur-per-1k-completion-tokens: ${ANALYSIS_COST_EUR_PER_1K_COMPLETION_TOKENS:0.00055}
+    # New analysis runs are rejected with 429 once this month's estimated spend reaches the budget.
+    monthly-budget-eur: ${ANALYSIS_COST_MONTHLY_BUDGET_EUR:5.00}
 
 logging:
   charset:
