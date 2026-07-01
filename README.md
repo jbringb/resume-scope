@@ -60,15 +60,11 @@ docker compose up -d postgres
 ./gradlew flywayMigrate
 ```
 
-This runs the migration scripts in `src/main/resources/db/migration/` (`V1`–`V5`) against the local database.
+This runs the migration scripts in `src/main/resources/db/migration/` (`V1`–`V6`) against the local database — needed to **run or test** the app locally.
 
-### 3. Generate jOOQ classes
+### 3. jOOQ classes (generated automatically)
 
-```bash
-./gradlew generateJooq
-```
-
-jOOQ reads the live schema and generates type-safe classes into `src/main/java/dev/jbringb/resume_scope/db/generated/`. **These sources are committed to the repository** (codegen does not run on every compile — `generateSchemaSourceOnCompilation = false`), so a plain `./gradlew build` / `test` needs **no database**. Only re-run `generateJooq` after a schema change, and commit the regenerated files. Never hand-edit them.
+jOOQ reads the Flyway migration SQL directly (no live database involved) and generates type-safe classes into `build/generated-jooq/` on every compile (`generateSchemaSourceOnCompilation = true`). Nothing to run by hand, and **nothing is committed** — a plain `./gradlew build` / `test` works fully offline, with no database needed for compilation. Never hand-edit the generated sources; edit a migration and rebuild instead.
 
 ### 4. Run the application
 
@@ -249,8 +245,8 @@ docker compose up -d postgres
 # Run the app
 OPENAI_API_KEY=sk-... ./gradlew bootRun
 
-# Re-run migrations + regenerate jOOQ after schema changes
-./gradlew flywayMigrate generateJooq
+# Re-apply migrations after a schema change (jOOQ regenerates automatically on the next build)
+./gradlew flywayMigrate
 ```
 
 ---
@@ -263,7 +259,7 @@ OPENAI_API_KEY=sk-... ./gradlew bootRun
 ./gradlew check         # spotlessCheck + tests
 ```
 
-Code is formatted with [Spotless](https://github.com/diffplug/spotless) using Palantir Java Format; the jOOQ-generated `db/generated/**` package is excluded (regenerate it instead of formatting). Run `./gradlew spotlessApply` before committing — CI enforces `spotlessCheck`.
+Code is formatted with [Spotless](https://github.com/diffplug/spotless) using Palantir Java Format; jOOQ-generated code lives under `build/generated-jooq` so it's outside Spotless's `src/**` target entirely (regenerate it instead of formatting). Run `./gradlew spotlessApply` before committing — CI enforces `spotlessCheck`.
 
 Every push and pull request runs the [**CI** workflow](.github/workflows/ci.yml) (format check → tests → build) and the [**CodeQL** security scan](.github/workflows/codeql.yml).
 

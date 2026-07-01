@@ -51,10 +51,10 @@ dependencies {
 
     implementation 'org.springframework.ai:spring-ai-starter-model-openai'
     implementation 'org.apache.pdfbox:pdfbox:3.0.7'
-    // JDBC driver: Flyway migrations + jOOQ codegen only. r2dbc-postgresql: runtime queries.
+    // JDBC driver: Flyway migrations at runtime only (jOOQ codegen reads the migration SQL directly).
     runtimeOnly 'org.postgresql:postgresql'
     runtimeOnly 'org.postgresql:r2dbc-postgresql'
-    jooqGenerator 'org.postgresql:postgresql'
+    jooqGenerator 'org.jooq:jooq-meta-extensions:3.19.30'
 
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
@@ -87,21 +87,45 @@ jooq {
     version = '3.19.30'
     configurations {
         main {
-            generateSchemaSourceOnCompilation = false
+            // Codegen reads the Flyway migration SQL directly (DDLDatabase) instead of connecting to a
+            // live Postgres, so it's hermetic and safe to run on every compile: no DB needed, and output
+            // goes under build/ (never committed) instead of src/main/java, so a codegen re-run can never
+            // touch hand-written sources.
+            generateSchemaSourceOnCompilation = true
 
             generationTool {
-                jdbc {
-                    driver   = 'org.postgresql.Driver'
-                    url      = dbUrl
-                    user     = dbUser
-                    password = dbPassword
-                }
                 generator {
                     name = 'org.jooq.codegen.DefaultGenerator'
                     database {
-                        name        = 'org.jooq.meta.postgres.PostgresDatabase'
-                        inputSchema = 'public'
+                        name = 'org.jooq.meta.extensions.ddl.DDLDatabase'
+                        properties {
+                            property {
+                                key   = 'scripts'
+                                value = 'src/main/resources/db/migration/*.sql'
+                            }
+                            property {
+                                key   = 'sort'
+                                value = 'flyway'
+                            }
+                            property {
+                                key   = 'unqualifiedSchema'
+                                value = 'none'
+                            }
+                            property {
+                                key   = 'defaultNameCase'
+                                value = 'lower'
+                            }
+                        }
+                        inputSchema = 'PUBLIC'
                         excludes    = 'flyway_schema_history'
+                        // DDLDatabase's parser maps JSONB columns to the generic JSON type by default
+                        // (unlike a live-Postgres connection, which resolves JSONB correctly) — force it.
+                        forcedTypes {
+                            forcedType {
+                                name         = 'JSONB'
+                                includeTypes = 'JSON'
+                            }
+                        }
                     }
                     generate {
                         deprecationOnUnknownTypes = false
@@ -113,7 +137,7 @@ jooq {
                     }
                     target {
                         packageName = 'dev.jbringb.resume_scope.db.generated'
-                        directory   = 'src/main/java'
+                        directory   = "${layout.buildDirectory.get()}/generated-jooq"
                     }
                 }
             }
@@ -136,7 +160,6 @@ spotless {
     java {
         palantirJavaFormat('2.71.0')
         target 'src/**/*.java'
-        targetExclude '**/db/generated/**'
     }
 }
 

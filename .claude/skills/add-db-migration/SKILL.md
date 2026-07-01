@@ -1,34 +1,38 @@
 ---
 name: add-db-migration
-description: Add a Flyway database migration to ResumeScope and regenerate the jOOQ code. Use whenever you need to change the PostgreSQL schema — new table, column, index, or constraint.
+description: Add a Flyway database migration to ResumeScope; jOOQ regenerates automatically. Use whenever you need to change the PostgreSQL schema — new table, column, index, or constraint.
 ---
 
-# Add a Flyway migration + regenerate jOOQ
+# Add a Flyway migration (jOOQ regenerates automatically)
 
-In this project, schema changes flow **migration → live DB → jOOQ codegen**. jOOQ-generated classes are committed in `src/main/java/dev/jbringb/resume_scope/db/generated/`, so they must be regenerated and committed whenever the schema changes.
+Schema changes flow **migration SQL → jOOQ codegen**. jOOQ reads the Flyway migration SQL directly (`DDLDatabase`, no live database involved) and regenerates classes into `build/generated-jooq/` on every compile — nothing is committed, nothing to run by hand for codegen.
 
 ## Steps
 
-1. **Inspect existing migrations** in `src/main/resources/db/migration/` (V1–V5) to match style, naming, and column conventions (snake_case, timestamps, `JSONB` for arrays/objects, etc.).
+1. **Inspect existing migrations** in `src/main/resources/db/migration/` (V1–V6) to match style, naming, and column conventions (snake_case, timestamps, `JSONB` for arrays/objects, etc.).
 2. **Create the next migration** `src/main/resources/db/migration/V{n}__{short_description}.sql`:
-   - Use the next sequential version number (current highest is `V5`).
+   - Use the next sequential version number (current highest is `V6`).
    - Migrations are **immutable and forward-only** — never edit an already-applied migration; add a new one instead.
    - Plain PostgreSQL DDL/DML.
-3. **Apply + regenerate** (needs Postgres running):
+3. **Regenerate + verify** (no database needed for this step):
+   ```bash
+   ./gradlew generateJooq
+   ```
+   Check `build/generated-jooq/.../db/generated/` picked up the new columns/tables as expected.
+4. **Update affected repositories** in `repository/` to use the new columns/tables (jOOQ DSL). Follow the `*Repo` field naming and existing repository patterns.
+5. **Apply the migration to a running Postgres** if you need to run or test the app locally:
    ```bash
    docker compose up -d postgres
-   ./gradlew flywayMigrate generateJooq
+   ./gradlew flywayMigrate
    ```
-   This writes updated `*Record`/`Tables`/`Keys` classes into `db/generated/` — **commit those**, do not hand-edit them.
-4. **Update affected repositories** in `repository/` to use the new columns/tables (jOOQ DSL). Follow the `*Repo` field naming and existing repository patterns.
-5. **Format & test:**
+6. **Format & test:**
    ```bash
    ./gradlew spotlessApply test
    ```
-6. If the change is reflected in the API, also update `src/main/resources/static/openapi.json` (see the `add-rest-endpoint` skill).
+7. If the change is reflected in the API, also update `src/main/resources/static/openapi.json` (see the `add-rest-endpoint` skill).
 
 ## Gotchas
 
-- `generateJooq` reads the **live** schema, so migrations must be applied first.
-- The gradle Flyway/jOOQ tasks read `DB_URL`/`DB_USER`/`DB_PASSWORD` (defaults target `localhost:5432/resumescope`), which is separate from the app's runtime datasource env vars.
+- jOOQ's `JSONB` type needs the `forcedTypes` rule in `build.gradle` (matches the DDLDatabase-resolved `JSON` type name) — `DDLDatabase` alone maps `JSONB` columns to the generic `org.jooq.JSON` type, not `org.jooq.JSONB`.
 - `flyway_schema_history` is excluded from jOOQ generation — don't reference it.
+- **Never point jOOQ's `target.directory` at a directory containing hand-written sources** (e.g. `src/main/java`). jOOQ's directory-cleanup previously wiped every non-generated file when configured that way; output must stay under `build/`.

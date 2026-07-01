@@ -24,7 +24,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # jOOQ output is committed and `generateSchemaSourceOnCompilation = false`,
+      # jOOQ codegen parses the Flyway migration SQL directly (no live database),
       # so no database is needed: spotlessCheck, tests, and build run offline.
       - name: Spotless check
         run: ./gradlew spotlessCheck --no-daemon

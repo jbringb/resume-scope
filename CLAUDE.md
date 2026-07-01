@@ -11,7 +11,7 @@ ResumeScope is an AI-powered CV/resume analysis API. An admin creates a **job ro
 - **Build:** Gradle, **Java 25** toolchain
 - **Framework:** Spring Boot **4.0.4**, Spring **WebFlux** — reactive **end-to-end** (jOOQ over R2DBC; no `Mono.fromCallable` wrapping of blocking DB calls)
 - **AI:** Spring AI **2.0.0-M3**, OpenAI starter — model `gpt-4o-mini`, temperature `0.0`. Swappable to a local OpenAI-compatible server (vLLM) via the `local-vllm` profile.
-- **Persistence:** PostgreSQL + **jOOQ 3.19** (type-safe SQL) executed **reactively over R2DBC** at runtime (`r2dbc-postgresql`; repos return `Mono`/`Flux`). **Flyway 11** runs migrations over a **JDBC** connection at startup (`spring.flyway.url`; Flyway has no R2DBC support). The jOOQ `DSLContext` is built from the R2DBC `ConnectionFactory` in `config/PersistenceConfiguration` (this makes Boot's JDBC jOOQ auto-config back off). jOOQ **codegen** still uses JDBC and is committed — unchanged.
+- **Persistence:** PostgreSQL + **jOOQ 3.19** (type-safe SQL) executed **reactively over R2DBC** at runtime (`r2dbc-postgresql`; repos return `Mono`/`Flux`). **Flyway 11** runs migrations over a **JDBC** connection at startup (`spring.flyway.url`; Flyway has no R2DBC support). The jOOQ `DSLContext` is built from the R2DBC `ConnectionFactory` in `config/PersistenceConfiguration` (this makes Boot's JDBC jOOQ auto-config back off). jOOQ **codegen** parses the Flyway migration SQL directly (`DDLDatabase`, no live database) and outputs to `build/generated-jooq` — **not committed**, regenerated on every build.
 - **PDF:** Apache PDFBox 3.0.7
 - **Boilerplate:** Lombok
 - **Formatting:** Spotless 8.4 with Palantir Java Format (120-col)
@@ -26,7 +26,7 @@ Root package `dev.jbringb.resume_scope`:
 - `repository/` — jOOQ data access (`*Repository`), reactive: methods return `Mono`/`Flux` (`Mono.from(...)`/`Flux.from(...)` over jOOQ R2DBC publishers)
 - `config/` — `ChatClientConfiguration` (Spring AI `ChatClient` + `ObjectMapper`), `PersistenceConfiguration` (jOOQ `DSLContext` over the R2DBC `ConnectionFactory`), `ApiKeyAuthFilter`
 - `pdf/` — `PdfTextExtractor` (PDFBox → text)
-- `db/generated/` — **jOOQ-generated code, committed to source. Never hand-edit; regenerate instead.**
+- `db/generated/` — **jOOQ-generated code**, produced under `build/generated-jooq` at build time (package `dev.jbringb.resume_scope.db.generated`). Not committed; never hand-edit — regenerate instead.
 
 **Async analysis flow (reactive):** `AnalysisService.triggerAnalysis` returns `Mono<TriggerAnalysisResponse>`, is idempotent (optional `Idempotency-Key` header, Postgres advisory lock via jOOQ `transactionPublisher`), and returns **202 + runId** → `CvAnalyzerService.processAnalysisRun(runId)` (a `Mono<Void>` subscribed fire-and-forget on `boundedElastic`) calls the LLM per candidate, clamps scores to 0–100, inserts results, **ranks 1..N by score desc**, sets run status `COMPLETED`/`FAILED`, and publishes to `AnalysisEventBus`. The PENDING insert auto-commits before processing is dispatched, so there is **no** `afterCommit` synchronization (and no visibility race). Clients poll `GET /api/analysis-runs/{runId}` **or** subscribe to the SSE stream `GET /api/analysis-runs/{runId}/events` (`AnalysisRunController` filters `AnalysisEventBus.stream()` by run id, completing on terminal status). Runs have a **timeout** (`analysis.run-timeout-minutes`, default 10): a `PENDING`/`RUNNING` run older than that is lazily marked `FAILED` on next access, and an expired idempotency key starts a fresh run. The LLM call (blocking) is offloaded to `boundedElastic` and inherits `spring.http.client.read-timeout`.
 
@@ -43,11 +43,12 @@ Root package `dev.jbringb.resume_scope`:
 
 ## Golden rules for agents
 
-1. **Schema change → regenerate jOOQ.** After editing/adding a Flyway migration, run `./gradlew flywayMigrate generateJooq` (needs a running Postgres). See the `add-db-migration` skill.
+1. **Schema change → regenerate jOOQ.** After editing/adding a Flyway migration, run `./gradlew generateJooq` — it reads the migration SQL directly, so **no database is needed**. (`flywayMigrate` against a running Postgres is only needed to actually apply the schema for local running/testing.) See the `add-db-migration` skill.
 2. **REST change → update the OpenAPI spec** in the same change. Source of truth: `src/main/resources/static/openapi.json` (served at `/openapi.json`). See the `add-rest-endpoint` skill.
 3. **Format before finishing:** `./gradlew spotlessApply`. CI runs `spotlessCheck`.
-4. **Never edit `db/generated/**`** — it's jOOQ output (Spotless excludes it too).
+4. **Never edit `db/generated/**`** — it's jOOQ output under `build/`, regenerated on every build; edits are silently discarded.
 5. **No secrets in code or commits.** `OPENAI_API_KEY` and DB credentials come from the environment.
+6. **Never point jOOQ's codegen `target.directory` at a directory containing hand-written sources.** jOOQ's directory-cleanup once deleted every non-generated file under `src/main/java` when it was configured that way — codegen output must stay under `build/`.
 
 ## Commit conventions
 
@@ -63,8 +64,8 @@ Keep each commit focused on one logical change.
 ## Build & run
 
 ```bash
-docker compose up -d postgres                 # start Postgres (resumescope/resumescope on :5432)
-./gradlew flywayMigrate generateJooq          # apply migrations + regenerate jOOQ (only after schema changes)
+docker compose up -d postgres                 # start Postgres (resumescope/resumescope on :5432) — only needed to run/test the app
+./gradlew flywayMigrate                        # apply migrations to the running Postgres (needed to run/test locally)
 OPENAI_API_KEY=sk-... ./gradlew bootRun        # run the app on :8086
 ./gradlew spotlessApply                        # format
 ./gradlew test                                 # unit tests (JUnit 5 + Mockito)
@@ -75,8 +76,8 @@ docker compose up --build                      # full stack (Postgres + app) —
 
 - App port **8086**; health check: `GET /health` (open). `GET /api/job-roles` is a sanity check but requires `X-API-Key` when `API_KEY` is set.
 - Local LLM (no OpenAI key): start a vLLM server on `:8000`, then `SPRING_PROFILES_ACTIVE=local-vllm ./gradlew bootRun`.
-- **jOOQ code is committed**, and `generateSchemaSourceOnCompilation = false` — so plain `./gradlew test`/`build` does **not** need a database.
-- The [`Dockerfile`](Dockerfile) is a **self-building multi-stage** image: it compiles the boot jar from source inside Docker (no host `bootJar` needed) and extracts Spring Boot layers via the `tools` jarmode. This is what all deployment targets build.
+- **jOOQ codegen needs no database** — it parses the migration SQL directly and runs automatically on compile (`generateSchemaSourceOnCompilation = true`), so plain `./gradlew test`/`build`/`bootJar` work fully offline.
+- The [`Dockerfile`](Dockerfile) is a **self-building multi-stage** image: it compiles the boot jar from source inside Docker (no host `bootJar` needed, no database reachable during the image build) and extracts Spring Boot layers via the `tools` jarmode. This is what all deployment targets build.
 
 ## Config & environment
 
