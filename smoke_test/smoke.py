@@ -49,7 +49,6 @@ SMOKE_ENV_FILE = SCRIPT_DIR / ".env"
 COMPOSE_CMD = [
     "docker", "compose",
     "--env-file", str(SMOKE_ENV_FILE),
-    "-f", str(PROJECT_ROOT / "docker-compose.yml"),
     "-f", str(SCRIPT_DIR / "compose.smoke.yml"),
     "-p", "resume-scope-smoke",
 ]
@@ -266,11 +265,17 @@ def poll_run(run_id: str, timeout_s: int = 360) -> str:
 
 
 def print_results(run_id: str, role_title: str) -> None:
-    data = get(f"/api/analysis-runs/{run_id}/results")
-    ranked = sorted(data["results"], key=lambda r: r["rank"])
+    # /results returns ranked candidates; token/cost fields live on the run itself.
+    results_data = get(f"/api/analysis-runs/{run_id}/results")
+    run_data = get(f"/api/analysis-runs/{run_id}")
+    ranked = sorted(results_data["results"], key=lambda r: r["rank"])
     print(f"  --- {role_title} ---")
     for r in ranked:
         print(f"  rank {r['rank']}  score={r['overallScore']:>3}  {r['extractedName']}")
+    prompt_tok = run_data.get("promptTokens") or 0
+    compl_tok = run_data.get("completionTokens") or 0
+    cost = run_data.get("estimatedCostEur") or 0
+    print(f"  tokens: {prompt_tok} prompt / {compl_tok} completion  cost: EUR {cost}")
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +303,51 @@ def sse_stream_until_terminal(run_id: str, timeout_s: int = 120) -> int:
                 return events_seen
     print(f"ERROR: SSE stream ended without terminal status ({events_seen} events)")
     sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# New-feature checks
+# ---------------------------------------------------------------------------
+
+
+def check_auth() -> None:
+    """401 + problem+json when X-API-Key is missing and auth is enabled."""
+    if not API_KEY:
+        print("  skipped (API_KEY not set -- auth is disabled)")
+        return
+    req = urllib.request.Request(f"{BASE_URL}/api/job-roles", method="GET")
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        print("ERROR: expected 401 without X-API-Key header but got 200")
+        sys.exit(1)
+    except urllib.error.HTTPError as e:
+        if e.code != 401:
+            print(f"ERROR: expected 401 without API key, got {e.code}")
+            sys.exit(1)
+        content_type = e.headers.get("Content-Type", "")
+        if "problem+json" not in content_type:
+            print(f"ERROR: 401 Content-Type should be application/problem+json, got: {content_type}")
+            sys.exit(1)
+        print(f"  ok (401 + problem+json)")
+
+
+def check_monthly_usage() -> None:
+    """Verify GET /api/usage/monthly returns sane values after the analyses above."""
+    data = get("/api/usage/monthly")
+    prompt_tok = data.get("promptTokens", 0) or 0
+    cost = data.get("estimatedCostEur", 0) or 0
+    budget_exceeded = data.get("budgetExceeded", False)
+    key_name = data.get("apiKeyName")
+    if budget_exceeded:
+        print("ERROR: monthly budget unexpectedly exceeded during smoke test")
+        sys.exit(1)
+    print(
+        f"  promptTokens={prompt_tok}  estimatedCostEur(EUR)={cost}"
+        f"  budgetExceeded={budget_exceeded}  apiKeyName={key_name!r}"
+    )
+    if API_KEY and prompt_tok == 0:
+        print("ERROR: promptTokens should be > 0 after completing analyses with auth enabled")
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +415,7 @@ def main() -> None:
     preflight()
 
     n_roles = len(ROLES)
-    total = 3 + n_roles * 3 + 1  # preflight + (create+upload+analyze) per role + SSE
+    total = 3 + n_roles * 3 + 3  # preflight + (create+upload+analyze) per role + SSE + auth + usage
     step = 1
 
     # 1. Generate PDFs
@@ -428,6 +478,7 @@ def main() -> None:
 
     # SSE test
     print(f"[{step}/{total}] SSE - streaming run-status events")
+    step += 1
     run = post_json(
         f"/api/job-roles/{sse_role_id}/analyze",
         {},
@@ -437,6 +488,16 @@ def main() -> None:
     print(f"  run: {sse_run_id}")
     n = sse_stream_until_terminal(sse_run_id)
     print(f"  ok ({n} events, terminal reached)")
+
+    # Auth check
+    print(f"[{step}/{total}] auth - missing key should return 401")
+    step += 1
+    check_auth()
+
+    # Monthly usage
+    print(f"[{step}/{total}] usage - GET /api/usage/monthly")
+    step += 1
+    check_monthly_usage()
 
     print("\nDone.")
 

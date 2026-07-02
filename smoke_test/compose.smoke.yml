@@ -1,16 +1,47 @@
-# Compose override for run_smoke.sh.
+# Standalone compose for smoke.py — not an override of docker-compose.yml.
 #
-# We deliberately DON'T touch env_file: here. Instead we set the LLM config in
-# the `environment:` block (which always wins over env_file), with values
-# interpolated from test_scripts/.env via the script's `--env-file` flag.
-# This guarantees the smoke run uses the smoke key/model regardless of what's
-# in the project-root .env.
+# Postgres is intentionally not exposed on a host port, so the smoke stack
+# does not conflict with a dev postgres that may already be running on 5432.
+# The app container reaches postgres via the compose service name (postgres:5432).
+#
+# LLM config is taken from smoke_test/.env via the --env-file flag in smoke.py.
 services:
-  resume-scope:
+  postgres:
+    image: postgres:17-alpine
     environment:
+      POSTGRES_DB:       resumescope
+      POSTGRES_USER:     resumescope
+      POSTGRES_PASSWORD: resumescope
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U resumescope -d resumescope"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  resume-scope:
+    build:
+      context: ..
+    ports:
+      - "8086:8086"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      PORT: "8086"
+      # PG* feed both Flyway (JDBC) and jOOQ runtime (R2DBC); see application.yaml.
+      PGHOST:     postgres
+      PGPORT:     "5432"
+      PGDATABASE: resumescope
+      PGUSER:     resumescope
+      PGPASSWORD: resumescope
       # Force-clear in case the dev .env sets local-vllm.
       SPRING_PROFILES_ACTIVE: ""
-      # Sourced from test_scripts/.env via `docker compose --env-file`.
-      OPENAI_API_KEY:  ${OPENAI_API_KEY:?set in test_scripts/.env}
+      # Sourced from smoke_test/.env via `docker compose --env-file`.
+      OPENAI_API_KEY:  ${OPENAI_API_KEY:?set in smoke_test/.env}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
       OPENAI_MODEL:    ${OPENAI_MODEL:-gpt-4o-mini}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
