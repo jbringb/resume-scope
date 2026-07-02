@@ -13,14 +13,16 @@ import org.springframework.util.StringUtils;
  * Seeds the {@code api_key} table from the legacy {@code security.api-key} (env {@code API_KEY})
  * config on startup, so existing deployments keep working without any manual SQL: the shared
  * secret becomes a row named "default" with no per-key budget override (falls back to the global
- * {@code analysis.cost.monthly-budget-eur}). Idempotent — safe to run on every boot.
+ * {@code analysis.cost.monthly-budget-eur}). After upserting the current key, any other "default"
+ * rows with a different hash are deactivated — so rotating {@code API_KEY} revokes the old secret
+ * immediately on next boot, without leaving it active indefinitely.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class ApiKeySeeder implements ApplicationRunner {
 
-    private static final String DEFAULT_KEY_NAME = "default";
+    static final String DEFAULT_KEY_NAME = "default";
 
     private final ApiKeyRepository apiKeyRepo;
 
@@ -33,8 +35,10 @@ public class ApiKeySeeder implements ApplicationRunner {
             log.warn("No API key configured (security.api-key / API_KEY unset) — /api/** is open.");
             return;
         }
+        var hash = ApiKeyHashing.sha256Hex(legacyApiKey);
         apiKeyRepo
-                .ensureKeyExists(DEFAULT_KEY_NAME, ApiKeyHashing.sha256Hex(legacyApiKey), null)
+                .upsertActiveKey(DEFAULT_KEY_NAME, hash, null)
+                .then(apiKeyRepo.deactivateByNameExcludingHash(DEFAULT_KEY_NAME, hash))
                 .block();
     }
 }

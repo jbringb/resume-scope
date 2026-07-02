@@ -14,13 +14,19 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
 
 class ApiKeyAuthFilterTest {
 
     private final ApiKeyRepository apiKeyRepo = mock(ApiKeyRepository.class);
-    private final ApiKeyAuthFilter filter = new ApiKeyAuthFilter(apiKeyRepo);
+
+    private ApiKeyAuthFilter filterWithKey(String configuredKey) {
+        var f = new ApiKeyAuthFilter(apiKeyRepo);
+        ReflectionTestUtils.setField(f, "legacyApiKey", configuredKey);
+        return f;
+    }
 
     private static WebFilterChain recording(AtomicBoolean passedThrough) {
         return exchange -> {
@@ -30,8 +36,8 @@ class ApiKeyAuthFilterTest {
     }
 
     @Test
-    void inertWhenNoKeysConfigured() {
-        when(apiKeyRepo.hasAnyActiveKey()).thenReturn(Mono.just(false));
+    void inertWhenNoKeyConfigured() {
+        var filter = filterWithKey("");
         var passed = new AtomicBoolean(false);
         var exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/api/job-roles"));
 
@@ -41,8 +47,8 @@ class ApiKeyAuthFilterTest {
     }
 
     @Test
-    void rejectsMissingKeyWhenKeysAreConfigured() {
-        when(apiKeyRepo.hasAnyActiveKey()).thenReturn(Mono.just(true));
+    void rejectsMissingHeaderWhenKeyIsConfigured() {
+        var filter = filterWithKey("any-configured-key");
         var passed = new AtomicBoolean(false);
         var exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/api/job-roles"));
 
@@ -55,6 +61,7 @@ class ApiKeyAuthFilterTest {
 
     @Test
     void rejectsWrongKey() {
+        var filter = filterWithKey("any-configured-key");
         when(apiKeyRepo.findActiveByHash(anyString())).thenReturn(Mono.empty());
         var passed = new AtomicBoolean(false);
         var exchange = MockServerWebExchange.from(
@@ -68,6 +75,7 @@ class ApiKeyAuthFilterTest {
 
     @Test
     void allowsCorrectKeyAndStashesResolvedApiKeyId() {
+        var filter = filterWithKey("any-configured-key");
         var keyId = UUID.randomUUID();
         var record = new ApiKeyRecord();
         record.setId(keyId);
@@ -84,6 +92,7 @@ class ApiKeyAuthFilterTest {
 
     @Test
     void leavesNonApiPathsOpen() {
+        var filter = filterWithKey("any-configured-key");
         var passed = new AtomicBoolean(false);
         var exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/health"));
 
