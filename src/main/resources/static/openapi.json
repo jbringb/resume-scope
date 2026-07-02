@@ -409,7 +409,7 @@
     "/api/usage/monthly": {
       "get": {
         "tags": ["Usage"],
-        "summary": "Get aggregated LLM token usage and estimated cost for the current calendar month",
+        "summary": "Get aggregated LLM token usage and estimated cost for the current calendar month, scoped to the caller's API key",
         "operationId": "getMonthlyUsage",
         "responses": {
           "200": {
@@ -431,7 +431,7 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-API-Key",
-        "description": "Shared API key for all /api/** endpoints. Required when the server has API_KEY set (deployed environments); disabled when unset (local/dev)."
+        "description": "API key for all /api/** endpoints, resolved against the api_key table (hashed lookup). The legacy API_KEY env var is seeded as a key named 'default' on startup. Required when at least one key is configured (deployed environments); disabled when no keys exist (local/dev). Each key can carry its own monthly budget override and scopes usage/cost tracking independently."
       }
     },
     "schemas": {
@@ -489,8 +489,9 @@
           "completionTokens": { "type": "integer" },
           "totalTokens": { "type": "integer" },
           "estimatedCostEur": { "type": "number", "format": "decimal" },
-          "monthlyBudgetEur": { "type": "number", "format": "decimal" },
-          "budgetExceeded": { "type": "boolean", "description": "True once this month's estimated cost has reached the budget; new analysis runs are rejected with 429 until the next month." }
+          "monthlyBudgetEur": { "type": "number", "format": "decimal", "description": "Effective budget for this scope: the calling API key's own override if set, otherwise the global default." },
+          "budgetExceeded": { "type": "boolean", "description": "True once this month's estimated cost has reached the budget; new analysis runs are rejected with 429 until the next month." },
+          "apiKeyName": { "type": "string", "nullable": true, "description": "Name of the API key this usage is scoped to; null when auth is disabled (no keys configured)." }
         }
       },
       "TriggerAnalysisResponse": {

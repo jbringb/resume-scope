@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -12,12 +13,14 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.jbringb.resume_scope.db.generated.tables.records.AnalysisRunRecord;
+import dev.jbringb.resume_scope.db.generated.tables.records.ApiKeyRecord;
 import dev.jbringb.resume_scope.db.generated.tables.records.CandidateRecord;
 import dev.jbringb.resume_scope.db.generated.tables.records.JobRoleRecord;
 import dev.jbringb.resume_scope.repository.AnalysisRepository;
 import dev.jbringb.resume_scope.repository.AnalysisRunRepository;
 import dev.jbringb.resume_scope.repository.AnalysisRunRepository.UsageTotals;
 import dev.jbringb.resume_scope.repository.AnalysisTriggerIdempotencyRepository;
+import dev.jbringb.resume_scope.repository.ApiKeyRepository;
 import dev.jbringb.resume_scope.repository.CandidateRepository;
 import dev.jbringb.resume_scope.repository.JobRoleRepository;
 import java.math.BigDecimal;
@@ -64,6 +67,9 @@ class AnalysisServiceTest {
     @Mock
     AnalysisTriggerIdempotencyLock analysisTriggerIdempotencyLock;
 
+    @Mock
+    ApiKeyRepository apiKeyRepo;
+
     @InjectMocks
     AnalysisService analysisSvc;
 
@@ -78,7 +84,7 @@ class AnalysisServiceTest {
         lenient().when(cvAnalyzerSvc.processAnalysisRun(any())).thenReturn(Mono.empty());
         // Under budget by default; individual tests override to exercise the 429 path.
         lenient()
-                .when(analysisRunRepo.sumUsageSince(any()))
+                .when(analysisRunRepo.sumUsageSince(any(), any()))
                 .thenReturn(Mono.just(new UsageTotals(0, 0, BigDecimal.ZERO)));
     }
 
@@ -87,7 +93,7 @@ class AnalysisServiceTest {
         var id = UUID.randomUUID();
         when(jobRoleRepo.findById(id)).thenReturn(Mono.empty());
 
-        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.empty()))
+        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.empty(), null))
                 .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
                         .isEqualTo(HttpStatus.NOT_FOUND))
                 .verify();
@@ -99,7 +105,7 @@ class AnalysisServiceTest {
         when(jobRoleRepo.findById(id)).thenReturn(Mono.just(new JobRoleRecord()));
         when(candidateRepo.findByJobRoleId(id)).thenReturn(Flux.empty());
 
-        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.empty()))
+        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.empty(), null))
                 .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
                         .isEqualTo(HttpStatus.BAD_REQUEST))
                 .verify();
@@ -114,9 +120,9 @@ class AnalysisServiceTest {
 
         var run = new AnalysisRunRecord();
         run.setId(runId);
-        when(analysisRunRepo.insertPending(jobRoleId)).thenReturn(Mono.just(run));
+        when(analysisRunRepo.insertPending(jobRoleId, null)).thenReturn(Mono.just(run));
 
-        StepVerifier.create(analysisSvc.triggerAnalysis(jobRoleId, Optional.empty()))
+        StepVerifier.create(analysisSvc.triggerAnalysis(jobRoleId, Optional.empty(), null))
                 .assertNext(response -> assertThat(response.runId()).isEqualTo(runId))
                 .verifyComplete();
 
@@ -129,7 +135,7 @@ class AnalysisServiceTest {
         when(jobRoleRepo.findById(id)).thenReturn(Mono.just(new JobRoleRecord()));
         when(candidateRepo.findByJobRoleId(id)).thenReturn(Flux.just(new CandidateRecord()));
 
-        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.of("   ")))
+        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.of("   "), null))
                 .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
                         .isEqualTo(HttpStatus.BAD_REQUEST))
                 .verify();
@@ -142,7 +148,7 @@ class AnalysisServiceTest {
         when(jobRoleRepo.findById(id)).thenReturn(Mono.just(new JobRoleRecord()));
         when(candidateRepo.findByJobRoleId(id)).thenReturn(Flux.just(new CandidateRecord()));
 
-        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.of("x".repeat(256))))
+        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.of("x".repeat(256)), null))
                 .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
                         .isEqualTo(HttpStatus.BAD_REQUEST))
                 .verify();
@@ -163,17 +169,19 @@ class AnalysisServiceTest {
         run.setId(runId);
         run.setStatus("PENDING");
         run.setTriggeredAt(OffsetDateTime.now());
-        when(analysisRunRepo.insertPending(jobRoleId)).thenReturn(Mono.just(run));
+        when(analysisRunRepo.insertPending(jobRoleId, null)).thenReturn(Mono.just(run));
         // Replay only happens while the existing run is still active (recent, non-terminal).
         when(analysisRunRepo.findById(runId)).thenReturn(Mono.just(run));
         when(analysisTriggerIdempotencyRepo.insert(jobRoleId, key, runId)).thenReturn(Mono.empty());
 
-        var first = analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key)).block();
-        var second = analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key)).block();
+        var first =
+                analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key), null).block();
+        var second =
+                analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key), null).block();
 
         assertThat(first.runId()).isEqualTo(runId);
         assertThat(second.runId()).isEqualTo(runId);
-        verify(analysisRunRepo, times(1)).insertPending(jobRoleId);
+        verify(analysisRunRepo, times(1)).insertPending(jobRoleId, null);
         verify(cvAnalyzerSvc, times(1)).processAnalysisRun(runId);
         verify(analysisTriggerIdempotencyRepo).insert(jobRoleId, key, runId);
     }
@@ -198,10 +206,10 @@ class AnalysisServiceTest {
 
         var newRun = new AnalysisRunRecord();
         newRun.setId(newRunId);
-        when(analysisRunRepo.insertPending(jobRoleId)).thenReturn(Mono.just(newRun));
+        when(analysisRunRepo.insertPending(jobRoleId, null)).thenReturn(Mono.just(newRun));
         when(analysisTriggerIdempotencyRepo.repoint(jobRoleId, key, newRunId)).thenReturn(Mono.empty());
 
-        StepVerifier.create(analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key)))
+        StepVerifier.create(analysisSvc.triggerAnalysis(jobRoleId, Optional.of(key), null))
                 .assertNext(response -> assertThat(response.runId()).isEqualTo(newRunId))
                 .verifyComplete();
 
@@ -258,28 +266,72 @@ class AnalysisServiceTest {
         var id = UUID.randomUUID();
         when(jobRoleRepo.findById(id)).thenReturn(Mono.just(new JobRoleRecord()));
         when(candidateRepo.findByJobRoleId(id)).thenReturn(Flux.just(new CandidateRecord()));
-        when(analysisRunRepo.sumUsageSince(any()))
+        when(analysisRunRepo.sumUsageSince(any(), any()))
                 .thenReturn(Mono.just(new UsageTotals(1000, 1000, new BigDecimal("5.00"))));
 
-        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.empty()))
+        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.empty(), null))
                 .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
                         .isEqualTo(HttpStatus.TOO_MANY_REQUESTS))
                 .verify();
-        verify(analysisRunRepo, never()).insertPending(any());
+        verify(analysisRunRepo, never()).insertPending(any(), any());
+    }
+
+    @Test
+    void triggerAnalysis_scopesBudgetCheckToApiKeyAndUsesItsOverride() {
+        var jobRoleId = UUID.randomUUID();
+        var apiKeyId = UUID.randomUUID();
+        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Mono.just(new JobRoleRecord()));
+        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(Flux.just(new CandidateRecord()));
+
+        var key = new ApiKeyRecord();
+        key.setId(apiKeyId);
+        key.setName("acme");
+        key.setMonthlyBudgetEur(new BigDecimal("1.00"));
+        when(apiKeyRepo.findById(apiKeyId)).thenReturn(Mono.just(key));
+        // This key's own override (1.00) is already exceeded, even though the global default (5.00) is not.
+        when(analysisRunRepo.sumUsageSince(any(), eq(apiKeyId)))
+                .thenReturn(Mono.just(new UsageTotals(1000, 1000, new BigDecimal("1.00"))));
+
+        StepVerifier.create(analysisSvc.triggerAnalysis(jobRoleId, Optional.empty(), apiKeyId))
+                .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.TOO_MANY_REQUESTS))
+                .verify();
+        verify(analysisRunRepo, never()).insertPending(any(), any());
     }
 
     @Test
     void monthlyUsage_returnsAggregatedTotalsAndBudgetStatus() {
-        when(analysisRunRepo.sumUsageSince(any()))
+        when(analysisRunRepo.sumUsageSince(any(), isNull()))
                 .thenReturn(Mono.just(new UsageTotals(1000, 500, new BigDecimal("2.50"))));
 
-        StepVerifier.create(analysisSvc.monthlyUsage())
+        StepVerifier.create(analysisSvc.monthlyUsage(null))
                 .assertNext(usage -> {
                     assertThat(usage.promptTokens()).isEqualTo(1000);
                     assertThat(usage.completionTokens()).isEqualTo(500);
                     assertThat(usage.totalTokens()).isEqualTo(1500);
                     assertThat(usage.estimatedCostEur()).isEqualByComparingTo("2.50");
                     assertThat(usage.monthlyBudgetEur()).isEqualByComparingTo("5.00");
+                    assertThat(usage.budgetExceeded()).isFalse();
+                    assertThat(usage.apiKeyName()).isNull();
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void monthlyUsage_forApiKey_usesItsOverrideBudgetAndName() {
+        var apiKeyId = UUID.randomUUID();
+        var key = new ApiKeyRecord();
+        key.setId(apiKeyId);
+        key.setName("acme");
+        key.setMonthlyBudgetEur(new BigDecimal("10.00"));
+        when(apiKeyRepo.findById(apiKeyId)).thenReturn(Mono.just(key));
+        when(analysisRunRepo.sumUsageSince(any(), eq(apiKeyId)))
+                .thenReturn(Mono.just(new UsageTotals(1000, 500, new BigDecimal("2.50"))));
+
+        StepVerifier.create(analysisSvc.monthlyUsage(apiKeyId))
+                .assertNext(usage -> {
+                    assertThat(usage.monthlyBudgetEur()).isEqualByComparingTo("10.00");
+                    assertThat(usage.apiKeyName()).isEqualTo("acme");
                     assertThat(usage.budgetExceeded()).isFalse();
                 })
                 .verifyComplete();

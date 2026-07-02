@@ -12,6 +12,7 @@ import dev.jbringb.resume_scope.db.generated.tables.records.AnalysisRunRecord;
 import dev.jbringb.resume_scope.repository.AnalysisRepository;
 import dev.jbringb.resume_scope.repository.AnalysisRunRepository;
 import dev.jbringb.resume_scope.repository.AnalysisTriggerIdempotencyRepository;
+import dev.jbringb.resume_scope.repository.ApiKeyRepository;
 import dev.jbringb.resume_scope.repository.CandidateRepository;
 import dev.jbringb.resume_scope.repository.JobRoleRepository;
 import java.math.BigDecimal;
@@ -45,6 +46,7 @@ public class AnalysisService {
     private final ObjectMapper objectMapper;
     private final AnalysisTriggerIdempotencyRepository analysisTriggerIdempotencyRepo;
     private final AnalysisTriggerIdempotencyLock analysisTriggerIdempotencyLock;
+    private final ApiKeyRepository apiKeyRepo;
 
     private static final Set<String> TERMINAL_STATUSES = Set.of("COMPLETED", "FAILED");
     private static final String EXPIRED_MESSAGE = "Expired: no result within the allowed time";
@@ -57,7 +59,8 @@ public class AnalysisService {
     @Value("${analysis.cost.monthly-budget-eur}")
     private BigDecimal monthlyBudgetEur;
 
-    public Mono<TriggerAnalysisResponse> triggerAnalysis(UUID jobRoleId, Optional<String> idempotencyKeyHeader) {
+    public Mono<TriggerAnalysisResponse> triggerAnalysis(
+            UUID jobRoleId, Optional<String> idempotencyKeyHeader, UUID apiKeyId) {
         log.info("Triggering analysis for job role {}", jobRoleId);
         return jobRoleRepo
                 .findById(jobRoleId)
@@ -69,34 +72,36 @@ public class AnalysisService {
                                 new ResponseStatusException(HttpStatus.BAD_REQUEST, "No candidates to analyze"));
                     }
                     var key = normalizeIdempotencyKey(idempotencyKeyHeader);
-                    return key.isEmpty() ? insertRunAndSchedule(jobRoleId) : idempotentTrigger(jobRoleId, key.get());
+                    return key.isEmpty()
+                            ? insertRunAndSchedule(jobRoleId, apiKeyId)
+                            : idempotentTrigger(jobRoleId, key.get(), apiKeyId);
                 });
     }
 
     // Serialized per (jobRoleId, key) by the advisory lock: replay an active run, otherwise start a
     // fresh one and repoint the key. A brand-new key inserts the mapping.
-    private Mono<TriggerAnalysisResponse> idempotentTrigger(UUID jobRoleId, String key) {
+    private Mono<TriggerAnalysisResponse> idempotentTrigger(UUID jobRoleId, String key, UUID apiKeyId) {
         Mono<TriggerAnalysisResponse> action = analysisTriggerIdempotencyRepo
                 .findAnalysisRunId(jobRoleId, key)
                 .flatMap(existingRunId -> analysisRunRepo
                         .findById(existingRunId)
                         .flatMap(existingRun -> isActive(existingRun)
                                 ? Mono.just(new TriggerAnalysisResponse(existingRunId))
-                                : expireIfStale(existingRun).then(newRunRepointing(jobRoleId, key)))
+                                : expireIfStale(existingRun).then(newRunRepointing(jobRoleId, key, apiKeyId)))
                         // Mapping exists but the run row is gone: start fresh and repoint.
-                        .switchIfEmpty(Mono.defer(() -> newRunRepointing(jobRoleId, key))))
-                .switchIfEmpty(Mono.defer(() -> newRunWithMapping(jobRoleId, key)));
+                        .switchIfEmpty(Mono.defer(() -> newRunRepointing(jobRoleId, key, apiKeyId))))
+                .switchIfEmpty(Mono.defer(() -> newRunWithMapping(jobRoleId, key, apiKeyId)));
         return analysisTriggerIdempotencyLock.withJobRoleKeyLock(jobRoleId, key, action);
     }
 
-    private Mono<TriggerAnalysisResponse> newRunWithMapping(UUID jobRoleId, String key) {
-        return insertRunAndSchedule(jobRoleId).flatMap(resp -> analysisTriggerIdempotencyRepo
+    private Mono<TriggerAnalysisResponse> newRunWithMapping(UUID jobRoleId, String key, UUID apiKeyId) {
+        return insertRunAndSchedule(jobRoleId, apiKeyId).flatMap(resp -> analysisTriggerIdempotencyRepo
                 .insert(jobRoleId, key, resp.runId())
                 .thenReturn(resp));
     }
 
-    private Mono<TriggerAnalysisResponse> newRunRepointing(UUID jobRoleId, String key) {
-        return insertRunAndSchedule(jobRoleId).flatMap(resp -> analysisTriggerIdempotencyRepo
+    private Mono<TriggerAnalysisResponse> newRunRepointing(UUID jobRoleId, String key, UUID apiKeyId) {
+        return insertRunAndSchedule(jobRoleId, apiKeyId).flatMap(resp -> analysisTriggerIdempotencyRepo
                 .repoint(jobRoleId, key, resp.runId())
                 .thenReturn(resp));
     }
@@ -127,40 +132,58 @@ public class AnalysisService {
                 });
     }
 
-    private Mono<TriggerAnalysisResponse> insertRunAndSchedule(UUID jobRoleId) {
-        return checkBudget()
-                .then(Mono.defer(() -> analysisRunRepo.insertPending(jobRoleId)))
+    private Mono<TriggerAnalysisResponse> insertRunAndSchedule(UUID jobRoleId, UUID apiKeyId) {
+        return checkBudget(apiKeyId)
+                .then(Mono.defer(() -> analysisRunRepo.insertPending(jobRoleId, apiKeyId)))
                 .map(AnalysisRunRecord::getId)
                 .doOnNext(runId -> log.info("Analysis run inserted: {}", runId))
                 .doOnNext(this::dispatchProcessing)
                 .map(TriggerAnalysisResponse::new);
     }
 
-    private Mono<Void> checkBudget() {
-        return analysisRunRepo.sumUsageSince(currentMonthStart()).flatMap(usage -> {
-            if (usage.estimatedCostEur().compareTo(monthlyBudgetEur) >= 0) {
-                return Mono.error(new ResponseStatusException(
-                        HttpStatus.TOO_MANY_REQUESTS,
-                        "Monthly LLM cost budget of €%s exceeded (spent €%s this month)"
-                                .formatted(monthlyBudgetEur, usage.estimatedCostEur())));
-            }
-            return Mono.empty();
-        });
+    private Mono<Void> checkBudget(UUID apiKeyId) {
+        return Mono.zip(analysisRunRepo.sumUsageSince(currentMonthStart(), apiKeyId), resolveBudgetAndName(apiKeyId))
+                .flatMap(t -> {
+                    var usage = t.getT1();
+                    var budget = t.getT2().budget();
+                    if (usage.estimatedCostEur().compareTo(budget) >= 0) {
+                        return Mono.error(new ResponseStatusException(
+                                HttpStatus.TOO_MANY_REQUESTS,
+                                "Monthly LLM cost budget of €%s exceeded (spent €%s this month)"
+                                        .formatted(budget, usage.estimatedCostEur())));
+                    }
+                    return Mono.empty();
+                });
     }
 
-    public Mono<MonthlyUsageResponse> monthlyUsage() {
+    public Mono<MonthlyUsageResponse> monthlyUsage(UUID apiKeyId) {
         var periodStart = currentMonthStart();
-        return analysisRunRepo
-                .sumUsageSince(periodStart)
-                .map(usage -> new MonthlyUsageResponse(
+        return analysisRunRepo.sumUsageSince(periodStart, apiKeyId).flatMap(usage -> resolveBudgetAndName(apiKeyId)
+                .map(budgetAndName -> new MonthlyUsageResponse(
                         periodStart,
                         usage.promptTokens(),
                         usage.completionTokens(),
                         usage.promptTokens() + usage.completionTokens(),
                         usage.estimatedCostEur(),
-                        monthlyBudgetEur,
-                        usage.estimatedCostEur().compareTo(monthlyBudgetEur) >= 0));
+                        budgetAndName.budget(),
+                        usage.estimatedCostEur().compareTo(budgetAndName.budget()) >= 0,
+                        budgetAndName.name())));
     }
+
+    // Resolves the effective monthly budget for a request: the key's own override if set, otherwise
+    // the global default. apiKeyId is null when auth is disabled (no keys configured).
+    private Mono<BudgetAndName> resolveBudgetAndName(UUID apiKeyId) {
+        if (apiKeyId == null) {
+            return Mono.just(new BudgetAndName(monthlyBudgetEur, null));
+        }
+        return apiKeyRepo
+                .findById(apiKeyId)
+                .map(k -> new BudgetAndName(
+                        k.getMonthlyBudgetEur() != null ? k.getMonthlyBudgetEur() : monthlyBudgetEur, k.getName()))
+                .defaultIfEmpty(new BudgetAndName(monthlyBudgetEur, null));
+    }
+
+    private record BudgetAndName(BigDecimal budget, String name) {}
 
     private static OffsetDateTime currentMonthStart() {
         return OffsetDateTime.now(ZoneOffset.UTC).withDayOfMonth(1).truncatedTo(ChronoUnit.DAYS);

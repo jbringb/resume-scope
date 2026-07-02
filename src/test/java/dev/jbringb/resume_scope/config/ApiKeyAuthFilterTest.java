@@ -1,7 +1,13 @@
 package dev.jbringb.resume_scope.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import dev.jbringb.resume_scope.db.generated.tables.records.ApiKeyRecord;
+import dev.jbringb.resume_scope.repository.ApiKeyRepository;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -13,6 +19,9 @@ import reactor.core.publisher.Mono;
 
 class ApiKeyAuthFilterTest {
 
+    private final ApiKeyRepository apiKeyRepo = mock(ApiKeyRepository.class);
+    private final ApiKeyAuthFilter filter = new ApiKeyAuthFilter(apiKeyRepo);
+
     private static WebFilterChain recording(AtomicBoolean passedThrough) {
         return exchange -> {
             passedThrough.set(true);
@@ -21,21 +30,23 @@ class ApiKeyAuthFilterTest {
     }
 
     @Test
-    void inertWhenNoKeyConfigured() {
+    void inertWhenNoKeysConfigured() {
+        when(apiKeyRepo.hasAnyActiveKey()).thenReturn(Mono.just(false));
         var passed = new AtomicBoolean(false);
         var exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/api/job-roles"));
 
-        new ApiKeyAuthFilter("").filter(exchange, recording(passed)).block();
+        filter.filter(exchange, recording(passed)).block();
 
         assertThat(passed).isTrue();
     }
 
     @Test
-    void rejectsMissingKey() {
+    void rejectsMissingKeyWhenKeysAreConfigured() {
+        when(apiKeyRepo.hasAnyActiveKey()).thenReturn(Mono.just(true));
         var passed = new AtomicBoolean(false);
         var exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/api/job-roles"));
 
-        new ApiKeyAuthFilter("secret").filter(exchange, recording(passed)).block();
+        filter.filter(exchange, recording(passed)).block();
 
         assertThat(passed).isFalse();
         assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
@@ -44,25 +55,31 @@ class ApiKeyAuthFilterTest {
 
     @Test
     void rejectsWrongKey() {
+        when(apiKeyRepo.findActiveByHash(anyString())).thenReturn(Mono.empty());
         var passed = new AtomicBoolean(false);
         var exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/api/job-roles").header("X-API-Key", "nope"));
 
-        new ApiKeyAuthFilter("secret").filter(exchange, recording(passed)).block();
+        filter.filter(exchange, recording(passed)).block();
 
         assertThat(passed).isFalse();
         assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
     @Test
-    void allowsCorrectKey() {
+    void allowsCorrectKeyAndStashesResolvedApiKeyId() {
+        var keyId = UUID.randomUUID();
+        var record = new ApiKeyRecord();
+        record.setId(keyId);
+        when(apiKeyRepo.findActiveByHash(anyString())).thenReturn(Mono.just(record));
         var passed = new AtomicBoolean(false);
         var exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/api/job-roles").header("X-API-Key", "secret"));
 
-        new ApiKeyAuthFilter("secret").filter(exchange, recording(passed)).block();
+        filter.filter(exchange, recording(passed)).block();
 
         assertThat(passed).isTrue();
+        assertThat(ApiKeyAuthFilter.resolvedApiKeyId(exchange)).isEqualTo(keyId);
     }
 
     @Test
@@ -70,7 +87,7 @@ class ApiKeyAuthFilterTest {
         var passed = new AtomicBoolean(false);
         var exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/health"));
 
-        new ApiKeyAuthFilter("secret").filter(exchange, recording(passed)).block();
+        filter.filter(exchange, recording(passed)).block();
 
         assertThat(passed).isTrue();
     }

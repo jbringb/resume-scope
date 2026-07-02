@@ -3,6 +3,7 @@ package dev.jbringb.resume_scope.api;
 import dev.jbringb.resume_scope.api.dto.AnalysisRunResponse;
 import dev.jbringb.resume_scope.api.dto.JobRoleResultsResponse;
 import dev.jbringb.resume_scope.api.dto.TriggerAnalysisResponse;
+import dev.jbringb.resume_scope.config.ApiKeyAuthFilter;
 import dev.jbringb.resume_scope.service.AnalysisService;
 import java.util.List;
 import java.util.Optional;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
 @RestController
@@ -28,9 +30,11 @@ public class JobRoleAnalysisController {
     @PostMapping("/analyze")
     public Mono<ResponseEntity<TriggerAnalysisResponse>> analyze(
             @PathVariable UUID jobRoleId,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            ServerWebExchange exchange) {
         return analysisSvc
-                .triggerAnalysis(jobRoleId, Optional.ofNullable(idempotencyKey))
+                .triggerAnalysis(
+                        jobRoleId, Optional.ofNullable(idempotencyKey), ApiKeyAuthFilter.resolvedApiKeyId(exchange))
                 .map(body -> ResponseEntity.status(HttpStatus.ACCEPTED).body(body));
     }
 

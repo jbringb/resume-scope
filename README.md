@@ -60,7 +60,7 @@ docker compose up -d postgres
 ./gradlew flywayMigrate
 ```
 
-This runs the migration scripts in `src/main/resources/db/migration/` (`V1`–`V6`) against the local database — needed to **run or test** the app locally.
+This runs the migration scripts in `src/main/resources/db/migration/` (`V1`–`V7`) against the local database — needed to **run or test** the app locally.
 
 ### 3. jOOQ classes (generated automatically)
 
@@ -124,7 +124,7 @@ curl -X POST http://localhost:8086/api/job-roles/{id}/candidates \
 | GET    | `/api/analysis-runs/{runId}/events`         | **SSE** live run-status stream (closes on terminal status) |
 | GET    | `/api/usage/monthly`                        | Aggregated LLM token usage and estimated EUR cost for the current calendar month |
 
-**Cost tracking:** every completed run records the prompt/completion token counts and an estimated EUR cost (from Spring AI's usage metadata) on the `AnalysisRunResponse`. New analysis runs are rejected with `429` once this month's estimated spend reaches `analysis.cost.monthly-budget-eur` (default €5.00) — check current spend via `GET /api/usage/monthly`.
+**Cost tracking:** every completed run records the prompt/completion token counts and an estimated EUR cost (from Spring AI's usage metadata) on the `AnalysisRunResponse`. Spend is tracked **per API key** (see [API authentication](#api-authentication)): new analysis runs are rejected with `429` once that key's monthly budget is reached — check current spend via `GET /api/usage/monthly`.
 
 **Live updates (SSE):** instead of polling `GET /api/analysis-runs/{runId}`, subscribe to the event stream — it pushes the current state immediately, then each status transition, and closes when the run is `COMPLETED`/`FAILED`:
 
@@ -166,18 +166,24 @@ All config lives in `src/main/resources/application.yaml`. Key environment varia
 | `OPENAI_API_KEY` | API key (OpenAI or any OpenAI-compatible provider) | `change-me` in `application.yaml`; `local-dummy` in `local-vllm` profile |
 | `OPENAI_BASE_URL`| Provider host (no `/v1` — Spring AI appends it). Override to use Groq / OpenRouter / vLLM. | `https://api.openai.com` |
 | `OPENAI_MODEL`   | Chat model id | `gpt-4o-mini` |
-| `API_KEY`        | Shared secret required on `/api/**` (sent as the `X-API-Key` header). Empty = auth disabled. | empty (open) |
+| `API_KEY`        | Seeds a default API key on startup (sent as the `X-API-Key` header). Empty = auth disabled. | empty (open) |
 | `ANALYSIS_COST_EUR_PER_1K_PROMPT_TOKENS` | EUR price per 1,000 prompt tokens, for cost estimation | `0.00014` (approximates `gpt-4o-mini`) |
 | `ANALYSIS_COST_EUR_PER_1K_COMPLETION_TOKENS` | EUR price per 1,000 completion tokens, for cost estimation | `0.00055` (approximates `gpt-4o-mini`) |
-| `ANALYSIS_COST_MONTHLY_BUDGET_EUR` | Monthly estimated-cost cap; new analysis runs return `429` once reached | `5.00` |
+| `ANALYSIS_COST_MONTHLY_BUDGET_EUR` | Global default monthly estimated-cost cap; new analysis runs return `429` once a key's effective budget is reached | `5.00` |
 
 ### API authentication
 
-When `API_KEY` is set, every `/api/**` request must include a matching `X-API-Key` header, otherwise it returns `401`. The `/health` endpoint stays open for platform health checks. Leave `API_KEY` unset for local development.
+API keys are resolved from the `api_key` table (hashed lookup — nothing is stored or compared in plaintext). On startup, `API_KEY` (if set) is seeded as a row named `"default"` with no budget override, so existing single-key deployments keep working unchanged. Every `/api/**` request must include a matching `X-API-Key` header once at least one key exists, otherwise it returns `401`; if the table is empty, auth is disabled (open — the default for local development). The `/health` endpoint always stays open for platform health checks.
 
 ```bash
 # With auth enabled:
 curl -H "X-API-Key: $API_KEY" https://<host>/api/job-roles
+```
+
+**Multiple keys / per-key budgets:** each row in `api_key` can carry its own `monthly_budget_eur` override (falls back to `ANALYSIS_COST_MONTHLY_BUDGET_EUR` when unset); `GET /api/usage/monthly` and the `429` budget check are scoped to the resolved caller's key. There's no admin endpoint yet — add a key by precomputing its SHA-256 hash (keys are never stored in plaintext) and inserting it directly:
+```bash
+KEY_HASH=$(printf '%s' 'their-raw-key' | openssl dgst -sha256 | awk '{print $2}')
+psql "$DATABASE_URL" -c "INSERT INTO api_key (name, key_hash, monthly_budget_eur) VALUES ('acme-corp', '$KEY_HASH', 10.00);"
 ```
 
 For any **OpenAI-compatible** provider (Groq, OpenRouter, Together, a local vLLM, …) no code change is needed — set `OPENAI_BASE_URL`, `OPENAI_MODEL`, and `OPENAI_API_KEY`. To switch to a **non-compatible** provider, replace `spring-ai-starter-model-openai` in `build.gradle` with that provider's starter (e.g. `spring-ai-starter-model-anthropic`) and update the `spring.ai.*` config block. Application code uses Spring AI’s provider-agnostic `ChatClient` API.

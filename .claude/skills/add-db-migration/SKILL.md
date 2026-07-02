@@ -9,9 +9,9 @@ Schema changes flow **migration SQL → jOOQ codegen**. jOOQ reads the Flyway mi
 
 ## Steps
 
-1. **Inspect existing migrations** in `src/main/resources/db/migration/` (V1–V6) to match style, naming, and column conventions (snake_case, timestamps, `JSONB` for arrays/objects, etc.).
+1. **Inspect existing migrations** in `src/main/resources/db/migration/` (V1–V7) to match style, naming, and column conventions (snake_case, timestamps, `JSONB` for arrays/objects, etc.).
 2. **Create the next migration** `src/main/resources/db/migration/V{n}__{short_description}.sql`:
-   - Use the next sequential version number (current highest is `V6`).
+   - Use the next sequential version number (current highest is `V7`).
    - Migrations are **immutable and forward-only** — never edit an already-applied migration; add a new one instead.
    - Plain PostgreSQL DDL/DML.
 3. **Regenerate + verify** (no database needed for this step):

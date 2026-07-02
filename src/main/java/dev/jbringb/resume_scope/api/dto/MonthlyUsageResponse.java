@@ -10,4 +10,5 @@ public record MonthlyUsageResponse(
         long totalTokens,
         BigDecimal estimatedCostEur,
         BigDecimal monthlyBudgetEur,
-        boolean budgetExceeded) {}
+        boolean budgetExceeded,
+        String apiKeyName) {}

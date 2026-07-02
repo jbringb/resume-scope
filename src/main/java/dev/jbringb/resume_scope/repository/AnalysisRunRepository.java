@@ -19,10 +19,11 @@ public class AnalysisRunRepository {
 
     private final DSLContext dsl;
 
-    public Mono<AnalysisRunRecord> insertPending(UUID jobRoleId) {
-        return Mono.from(dsl.insertInto(ANALYSIS_RUN, ANALYSIS_RUN.JOB_ROLE_ID, ANALYSIS_RUN.STATUS)
-                .values(jobRoleId, "PENDING")
-                .returning());
+    public Mono<AnalysisRunRecord> insertPending(UUID jobRoleId, UUID apiKeyId) {
+        return Mono.from(
+                dsl.insertInto(ANALYSIS_RUN, ANALYSIS_RUN.JOB_ROLE_ID, ANALYSIS_RUN.STATUS, ANALYSIS_RUN.API_KEY_ID)
+                        .values(jobRoleId, "PENDING", apiKeyId)
+                        .returning());
     }
 
     public Mono<AnalysisRunRecord> findById(UUID id) {
@@ -70,15 +71,17 @@ public class AnalysisRunRepository {
                 .then();
     }
 
-    // Sums token usage and estimated cost across all runs triggered since `since` (used for the
-    // monthly usage endpoint and the budget check before starting a new run).
-    public Mono<UsageTotals> sumUsageSince(OffsetDateTime since) {
+    // Sums token usage and estimated cost across runs triggered since `since`, scoped to a single
+    // API key (or to keyless/auth-disabled runs when apiKeyId is null) — used for the monthly usage
+    // endpoint and the budget check before starting a new run.
+    public Mono<UsageTotals> sumUsageSince(OffsetDateTime since, UUID apiKeyId) {
+        var keyCondition = apiKeyId == null ? ANALYSIS_RUN.API_KEY_ID.isNull() : ANALYSIS_RUN.API_KEY_ID.eq(apiKeyId);
         return Mono.from(dsl.select(
                                 DSL.coalesce(DSL.sum(ANALYSIS_RUN.PROMPT_TOKENS), BigDecimal.ZERO),
                                 DSL.coalesce(DSL.sum(ANALYSIS_RUN.COMPLETION_TOKENS), BigDecimal.ZERO),
                                 DSL.coalesce(DSL.sum(ANALYSIS_RUN.ESTIMATED_COST_EUR), BigDecimal.ZERO))
                         .from(ANALYSIS_RUN)
-                        .where(ANALYSIS_RUN.TRIGGERED_AT.ge(since)))
+                        .where(ANALYSIS_RUN.TRIGGERED_AT.ge(since).and(keyCondition)))
                 .map(r -> new UsageTotals(r.value1().longValue(), r.value2().longValue(), r.value3()));
     }
 
