@@ -188,9 +188,10 @@ public class CvAnalyzerService {
                     String prompt = buildUserPrompt(role, candidate, cvText);
                     ChatResponse response =
                             chatClient.prompt().user(prompt).call().chatResponse();
-                    String raw = response == null
-                            ? null
-                            : response.getResult().getOutput().getText();
+                    if (response == null) {
+                        throw new IllegalStateException("LLM returned no response");
+                    }
+                    String raw = response.getResult().getOutput().getText();
                     CvAnalysisResult parsed = outputConverter.convert(raw == null ? "" : raw);
                     if (parsed == null) {
                         throw new IllegalStateException("LLM returned no parseable analysis");
