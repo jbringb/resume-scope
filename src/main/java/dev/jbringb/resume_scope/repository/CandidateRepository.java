@@ -22,11 +22,6 @@ public class CandidateRepository {
                 .orderBy(CANDIDATE.CREATED_AT.asc()));
     }
 
-    public Mono<CandidateRecord> findByIdAndJobRoleId(UUID candidateId, UUID jobRoleId) {
-        return Mono.from(
-                dsl.selectFrom(CANDIDATE).where(CANDIDATE.ID.eq(candidateId).and(CANDIDATE.JOB_ROLE_ID.eq(jobRoleId))));
-    }
-
     public Mono<CandidateRecord> insert(UUID jobRoleId, String originalFilename, String cvText) {
         return Mono.from(
                 dsl.insertInto(CANDIDATE, CANDIDATE.JOB_ROLE_ID, CANDIDATE.ORIGINAL_FILENAME, CANDIDATE.CV_TEXT)
