@@ -43,5 +43,9 @@ out/
 ### Smoke test secrets and generated artefacts ###
 smoke_test/.env
 
+### Python bytecode cache (smoke test) ###
+__pycache__/
+*.pyc
+
 ### Local, account-specific deploy helpers (not for the public repo) ###
 deploy/aws/local/
