@@ -1,0 +1,7 @@
+name: "ResumeScope CodeQL config"
+
+# Exclude generated jOOQ code (produced under build/ at compile time) so the
+# Security tab reports only findings in hand-written source. The
+# security-and-quality suite still runs against src/**.
+paths-ignore:
+  - build

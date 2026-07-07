@@ -35,6 +35,8 @@ jobs:
           # security-and-quality covers the default security queries plus
           # maintainability checks. Free for public repositories.
           queries: security-and-quality
+          # Excludes generated jOOQ code (build/) from results.
+          config-file: ./.github/codeql/codeql-config.yml
 
       # Build the project so CodeQL can analyze compiled Java.
       - name: Build
