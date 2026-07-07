@@ -173,7 +173,7 @@ All config lives in `src/main/resources/application.yaml`. Key environment varia
 
 ### API authentication
 
-API keys are resolved from the `api_key` table (hashed lookup — nothing is stored or compared in plaintext). On startup, `API_KEY` (if set) is seeded as a row named `"default"` with no budget override, so existing single-key deployments keep working unchanged. Every `/api/**` request must include a matching `X-API-Key` header once at least one key exists, otherwise it returns `401`; if the table is empty, auth is disabled (open — the default for local development). The `/health` endpoint always stays open for platform health checks.
+API keys are resolved from the `api_key` table (hashed lookup — nothing is stored or compared in plaintext). On startup, `API_KEY` (if set) is seeded as a row named `"default"` with no budget override, so existing single-key deployments keep working unchanged. Auth is enabled when the `API_KEY` environment variable is set: every `/api/**` request must then carry a valid `X-API-Key` header (resolved against the `api_key` table), otherwise it returns `401`. When `API_KEY` is unset, auth is disabled — open, the default for local development. This is decided from config at startup, not from whether the table has rows, so there is no fail-open window while the default key is being seeded. The `/health` endpoint always stays open for platform health checks.
 
 ```bash
 # With auth enabled:

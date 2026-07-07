@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1
 
 # ---- Stage 1: build the layered boot jar inside Docker ----
-# Self-contained: jOOQ sources are committed and codegen does not run on
-# compile (generateSchemaSourceOnCompilation = false), so the build needs
-# no database. Temurin 25: no Java 26 JDK Alpine on Docker Hub yet.
+# Self-contained: jOOQ codegen parses the Flyway migration SQL directly
+# (DDLDatabase, no live database), so the build needs no database — the jOOQ
+# sources are generated under build/ during compile and are never committed.
+# Temurin 25: no Java 26 JDK Alpine on Docker Hub yet.
 FROM eclipse-temurin:25-jdk-alpine AS build
 WORKDIR /workspace
 
