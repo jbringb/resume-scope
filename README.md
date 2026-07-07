@@ -38,7 +38,7 @@ The [Dockerfile](Dockerfile) is **self-building** (it compiles the boot jar from
 
 ## Prerequisites
 
-- Docker Desktop
+- Docker Engine + CLI (with `docker compose`)
 - Java 25+ (`JAVA_HOME` pointing to JDK 25; Docker image uses `eclipse-temurin:25-jre-alpine`)
 - Either an **OpenAI API key** (`OPENAI_API_KEY`) for hosted inference, **or** a local [vLLM](https://docs.vllm.ai/) server with an OpenAI-compatible API (see [Local inference (vLLM)](#local-inference-vllm)).
 
@@ -173,7 +173,7 @@ All config lives in `src/main/resources/application.yaml`. Key environment varia
 
 ### API authentication
 
-API keys are resolved from the `api_key` table (hashed lookup — nothing is stored or compared in plaintext). On startup, `API_KEY` (if set) is seeded as a row named `"default"` with no budget override, so existing single-key deployments keep working unchanged. Every `/api/**` request must include a matching `X-API-Key` header once at least one key exists, otherwise it returns `401`; if the table is empty, auth is disabled (open — the default for local development). The `/health` endpoint always stays open for platform health checks.
+API keys are resolved from the `api_key` table (hashed lookup — nothing is stored or compared in plaintext). On startup, `API_KEY` (if set) is seeded as a row named `"default"` with no budget override, so existing single-key deployments keep working unchanged. Auth is enabled when the `API_KEY` environment variable is set: every `/api/**` request must then carry a valid `X-API-Key` header (resolved against the `api_key` table), otherwise it returns `401`. When `API_KEY` is unset, auth is disabled — open, the default for local development. This is decided from config at startup, not from whether the table has rows, so there is no fail-open window while the default key is being seeded. The `/health` endpoint always stays open for platform health checks.
 
 ```bash
 # With auth enabled:
@@ -244,7 +244,7 @@ Use the `local-vllm` Spring profile to send chat completions to a **local OpenAI
 docker compose up --build
 ```
 
-**Local vLLM on the host:** Inside the container, `localhost` is not your machine. Set **`OPENAI_BASE_URL=http://host.docker.internal:8000`** (still no `/v1`). Compose already adds `extra_hosts: host.docker.internal:host-gateway` for Linux; Docker Desktop provides `host.docker.internal` by default.
+**Local vLLM on the host:** Inside the container, `localhost` is not your machine. Set **`OPENAI_BASE_URL=http://host.docker.internal:8000`** (still no `/v1`). Compose already maps `host.docker.internal` to the host gateway (`extra_hosts: host.docker.internal:host-gateway`), so it resolves to the host on Linux, macOS, and Windows alike.
 
 ---
 
@@ -279,7 +279,7 @@ Every push and pull request runs the [**CI** workflow](.github/workflows/ci.yml)
 
 An end-to-end smoke test in [`smoke_test/smoke.py`](smoke_test/smoke.py) creates two job roles, uploads four CV fixtures to each, triggers LLM analysis, prints ranked results, and verifies the SSE event stream reaches a terminal status.
 
-**Prerequisites:** Python 3.10+, `reportlab` (`pip install reportlab`). Docker Desktop is only needed for local mode.
+**Prerequisites:** Python 3.10+, `reportlab` (`pip install reportlab`). Docker is only needed for local mode.
 
 **Local** (spins up the full stack via Docker Compose):
 ```bash
