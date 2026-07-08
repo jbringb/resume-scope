@@ -39,9 +39,10 @@ services:
       OPENAI_API_KEY:  ${OPENAI_API_KEY:?set in smoke_test/.env}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
       OPENAI_MODEL:    ${OPENAI_MODEL:-gpt-4o-mini}
+      # Optional: enables DB-backed API key auth. When set, ApiKeySeeder seeds
+      # this value as the "default" key and ApiKeyAuthFilter enforces the header.
+      # Leave unset for open local runs; set via CI secret for full auth coverage.
+      API_KEY: ${API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
-
-volumes:
-  postgres_data:

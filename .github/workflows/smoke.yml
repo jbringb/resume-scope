@@ -1,0 +1,58 @@
+name: Smoke Test
+
+# Runs the end-to-end smoke test against the real Docker image + a live OpenAI
+# API call. Triggered manually so it doesn't run (and spend money) on every push.
+#
+# Required GitHub secret (set on the "smoke" environment or at repo level):
+#   OPENAI_API_KEY   OpenAI key used by the containerised app for LLM calls
+#
+# Optional secret (enables the auth-check step; omit to run with auth disabled):
+#   SMOKE_API_KEY    Any string — seeded as the "default" API key so the smoke
+#                    test can verify that a missing X-API-Key header returns 401
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: smoke
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: End-to-end smoke test
+    runs-on: ubuntu-latest
+    environment: smoke
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: pip install reportlab
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Write smoke env file
+        # smoke_test/.env must exist and contain a non-placeholder OPENAI_API_KEY
+        # for the script's preflight check to pass.
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY" > smoke_test/.env
+
+      - name: Run smoke test
+        env:
+          # API_KEY is forwarded to the app container via compose.smoke.yml's
+          # ${API_KEY:-} interpolation. When set, auth is enabled and the smoke
+          # script's auth-check step verifies that a missing header returns 401.
+          API_KEY: ${{ secrets.SMOKE_API_KEY }}
+        run: python smoke_test/smoke.py
