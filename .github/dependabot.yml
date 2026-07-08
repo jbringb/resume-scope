@@ -1,8 +1,11 @@
 # Dependabot keeps dependencies current with weekly pull requests.
+# Minor/patch bumps are grouped into a single PR per ecosystem to avoid a flood;
+# major bumps stay separate so each one gets its own review (they can carry
+# breaking changes — e.g. a framework major that needs code migration).
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates
 version: 2
 updates:
-  # Gradle dependencies (build.gradle)
+  # Gradle dependencies and plugins (build.gradle)
   - package-ecosystem: gradle
     directory: /
     schedule:
@@ -10,6 +13,13 @@ updates:
     open-pull-requests-limit: 10
     commit-message:
       prefix: chore
+    groups:
+      gradle-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
 
   # GitHub Actions pinned in the workflows
   - package-ecosystem: github-actions
@@ -18,6 +28,10 @@ updates:
       interval: weekly
     commit-message:
       prefix: ci
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   # Base images in the Dockerfile
   - package-ecosystem: docker
@@ -26,3 +40,7 @@ updates:
       interval: weekly
     commit-message:
       prefix: chore
+    groups:
+      docker:
+        patterns:
+          - "*"
