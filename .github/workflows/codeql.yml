@@ -12,6 +12,9 @@ on:
 jobs:
   analyze:
     name: Analyze (java)
+    # Skip Dependabot PRs — a version-bump diff doesn't need its own scan;
+    # main already gets a push-triggered scan (and the weekly schedule).
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       actions: read
