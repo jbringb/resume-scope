@@ -101,13 +101,18 @@ public class CvAnalyzerService {
                         .concatMap(candidate -> analyzeAndInsert(role, candidate, runId))
                         .reduce(TokenUsage.ZERO, TokenUsage::plus)
                         .flatMap(usage -> applyRanks(runId).thenReturn(usage))
+                        .flatMap(usage -> analysisRunRepo
+                                .completeWithUsage(
+                                        runId,
+                                        OffsetDateTime.now(),
+                                        usage.promptTokens(),
+                                        usage.completionTokens(),
+                                        usage.estimatedCostEur(eurPer1kPromptTokens, eurPer1kCompletionTokens))
+                                .thenReturn(usage))
+                        // Metrics fire only after the DB write durably succeeds — if completeWithUsage
+                        // itself fails, this is skipped and onErrorResume's failRun below correctly
+                        // records "failed" instead of double-counting both outcomes for one run.
                         .doOnNext(this::recordRunCompleted)
-                        .flatMap(usage -> analysisRunRepo.completeWithUsage(
-                                runId,
-                                OffsetDateTime.now(),
-                                usage.promptTokens(),
-                                usage.completionTokens(),
-                                usage.estimatedCostEur(eurPer1kPromptTokens, eurPer1kCompletionTokens)))
                         .then(publishRun(runId)));
     }
 
@@ -155,9 +160,18 @@ public class CvAnalyzerService {
     }
 
     private Mono<Void> failRun(UUID runId, String message) {
-        meterRegistry.counter("resumescope.analysis.runs", "status", "failed").increment();
         return analysisRunRepo
                 .updateStatus(runId, "FAILED", OffsetDateTime.now(), message)
+                // Only count it if the guarded update actually transitioned the row — a no-op (the
+                // run already reached COMPLETED/FAILED via another writer) must not also record a
+                // "failed" metric for what was, in truth, a success.
+                .doOnNext(failed -> {
+                    if (failed) {
+                        meterRegistry
+                                .counter("resumescope.analysis.runs", "status", "failed")
+                                .increment();
+                    }
+                })
                 .then(publishRun(runId));
     }
 

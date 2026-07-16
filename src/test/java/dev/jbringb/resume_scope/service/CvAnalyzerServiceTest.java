@@ -95,7 +95,7 @@ class CvAnalyzerServiceTest {
         when(analysisRunRepo.findById(runId)).thenReturn(Mono.just(pendingRun(runId, jobRoleId)));
         when(jobRoleRepo.findById(jobRoleId)).thenReturn(Mono.empty());
         when(analysisRunRepo.updateStatus(eq(runId), eq("FAILED"), any(), eq("Job role not found")))
-                .thenReturn(Mono.empty());
+                .thenReturn(Mono.just(true));
 
         cvAnalyzerSvc.processAnalysisRun(runId).block();
 
@@ -155,6 +155,47 @@ class CvAnalyzerServiceTest {
                         .timer()
                         .count())
                 .isEqualTo(2); // one LLM call per candidate (alice, bob)
+    }
+
+    @Test
+    void processAnalysisRun_whenCompleteWithUsageFails_recordsOnlyFailedNotBothMetrics() {
+        // Regression test: recordRunCompleted (the completed/token/cost metrics) must only fire
+        // after completeWithUsage's DB write actually succeeds. Before the fix, the metrics fired
+        // first, so a completeWithUsage failure produced a "completed" AND a "failed" count for the
+        // same run, and could leave a genuinely-successful run's DB status stuck at FAILED.
+        var runId = UUID.randomUUID();
+        var jobRoleId = UUID.randomUUID();
+        when(analysisRunRepo.findById(runId)).thenReturn(Mono.just(pendingRun(runId, jobRoleId)));
+        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Mono.just(jobRole(jobRoleId, "Engineer")));
+        when(analysisRunRepo.updateStatusOnly(runId, "RUNNING")).thenReturn(Mono.empty());
+        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(Flux.just(candidate()));
+
+        stubLlmResponse(cvJson(80, "Alice", "alice@example.com"));
+
+        var analysisId = UUID.randomUUID();
+        when(analysisRepo.insert(any(), any(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(Mono.just(analysisId));
+        when(analysisRepo.updateRank(any(), anyInt())).thenReturn(Mono.empty());
+        when(analysisRepo.findByAnalysisRunIdOrderByScoreDesc(runId)).thenReturn(Flux.just(analysisRecord(analysisId)));
+        when(analysisRunRepo.completeWithUsage(eq(runId), any(), anyInt(), anyInt(), any()))
+                .thenReturn(Mono.error(new RuntimeException("DB write failed")));
+        when(analysisRunRepo.updateStatus(eq(runId), eq("FAILED"), any(), any()))
+                .thenReturn(Mono.just(true));
+
+        cvAnalyzerSvc.processAnalysisRun(runId).block();
+
+        verify(analysisRunRepo).updateStatus(eq(runId), eq("FAILED"), any(OffsetDateTime.class), any());
+        assertThat(meterRegistry
+                        .find("resumescope.analysis.runs")
+                        .tag("status", "completed")
+                        .counter())
+                .isNull();
+        assertThat(meterRegistry
+                        .get("resumescope.analysis.runs")
+                        .tag("status", "failed")
+                        .counter()
+                        .count())
+                .isEqualTo(1.0);
     }
 
     @Test

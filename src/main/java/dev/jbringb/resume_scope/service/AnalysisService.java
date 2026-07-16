@@ -47,6 +47,7 @@ public class AnalysisService {
     private final AnalysisTriggerIdempotencyRepository analysisTriggerIdempotencyRepo;
     private final AnalysisTriggerIdempotencyLock analysisTriggerIdempotencyLock;
     private final ApiKeyRepository apiKeyRepo;
+    private final ApiKeyBudgetLock apiKeyBudgetLock;
 
     private static final Set<String> TERMINAL_STATUSES = Set.of("COMPLETED", "FAILED");
     private static final String EXPIRED_MESSAGE = "Expired: no result within the allowed time";
@@ -123,22 +124,50 @@ public class AnalysisService {
         var now = OffsetDateTime.now();
         return analysisRunRepo
                 .updateStatus(run.getId(), "FAILED", now, EXPIRED_MESSAGE)
-                .thenReturn(run)
-                .map(r -> {
-                    r.setStatus("FAILED");
-                    r.setCompletedAt(now);
-                    r.setErrorMessage(EXPIRED_MESSAGE);
-                    return r;
-                });
+                .flatMap(expired -> expired
+                        // Genuinely expired it — reflect that in the in-memory copy for this response.
+                        ? Mono.just(markFailed(run, now))
+                        // The guard blocked the write: the run just reached a terminal state via the real
+                        // completion/failure path. Return the authoritative row instead of a stale guess.
+                        : analysisRunRepo.findById(run.getId()).defaultIfEmpty(run));
     }
 
+    private static AnalysisRunRecord markFailed(AnalysisRunRecord run, OffsetDateTime now) {
+        run.setStatus("FAILED");
+        run.setCompletedAt(now);
+        run.setErrorMessage(EXPIRED_MESSAGE);
+        return run;
+    }
+
+    // checkBudget alone is a TOCTOU race: sumUsageSince only sees COMPLETED runs' cost (PENDING/RUNNING
+    // rows have no estimated_cost_eur yet), so a burst of concurrent triggers could all read the same
+    // stale total and all pass. Capping at one in-flight run per key (checkNoActiveRun) and serializing
+    // the whole check-and-insert with a per-key advisory lock closes that: the worst case becomes "one
+    // run's worth of overage" instead of unbounded. A true dollar-accurate cap on in-flight cost isn't
+    // possible without knowing a run's cost ahead of the LLM call, so this is a deliberate, documented
+    // tradeoff, not a promise that concurrent runs under one key are impossible.
     private Mono<TriggerAnalysisResponse> insertRunAndSchedule(UUID jobRoleId, UUID apiKeyId) {
-        return checkBudget(apiKeyId)
-                .then(Mono.defer(() -> analysisRunRepo.insertPending(jobRoleId, apiKeyId)))
+        Mono<AnalysisRunRecord> checkAndInsert = checkNoActiveRun(apiKeyId)
+                .then(checkBudget(apiKeyId))
+                .then(Mono.defer(() -> analysisRunRepo.insertPending(jobRoleId, apiKeyId)));
+        return apiKeyBudgetLock
+                .withApiKeyLock(apiKeyId, checkAndInsert)
                 .map(AnalysisRunRecord::getId)
                 .doOnNext(runId -> log.info("Analysis run inserted: {}", runId))
                 .doOnNext(this::dispatchProcessing)
                 .map(TriggerAnalysisResponse::new);
+    }
+
+    private Mono<Void> checkNoActiveRun(UUID apiKeyId) {
+        var notExpiredSince = OffsetDateTime.now().minusMinutes(runTimeoutMinutes);
+        return analysisRunRepo
+                .existsActiveRun(apiKeyId, notExpiredSince)
+                .flatMap(active -> active
+                        ? Mono.error(
+                                new ResponseStatusException(
+                                        HttpStatus.TOO_MANY_REQUESTS,
+                                        "An analysis is already in progress for this API key; wait for it to complete before starting another."))
+                        : Mono.empty());
     }
 
     private Mono<Void> checkBudget(UUID apiKeyId) {

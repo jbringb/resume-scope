@@ -70,22 +70,28 @@ class AnalysisServiceTest {
     @Mock
     ApiKeyRepository apiKeyRepo;
 
+    @Mock
+    ApiKeyBudgetLock apiKeyBudgetLock;
+
     @InjectMocks
     AnalysisService analysisSvc;
 
     @BeforeEach
     void stubCommon() {
         ReflectionTestUtils.setField(analysisSvc, "monthlyBudgetEur", new BigDecimal("5.00"));
-        // Lock is a passthrough: run the supplied action Mono directly.
+        // Locks are passthroughs: run the supplied action Mono directly.
         lenient()
                 .when(analysisTriggerIdempotencyLock.withJobRoleKeyLock(any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(2));
+        lenient().when(apiKeyBudgetLock.withApiKeyLock(any(), any())).thenAnswer(inv -> inv.getArgument(1));
         // Background processing is fire-and-forget; return an empty Mono so dispatch is a no-op.
         lenient().when(cvAnalyzerSvc.processAnalysisRun(any())).thenReturn(Mono.empty());
         // Under budget by default; individual tests override to exercise the 429 path.
         lenient()
                 .when(analysisRunRepo.sumUsageSince(any(), any()))
                 .thenReturn(Mono.just(new UsageTotals(0, 0, BigDecimal.ZERO)));
+        // No run already in flight by default; one test overrides this to exercise the 429 path.
+        lenient().when(analysisRunRepo.existsActiveRun(any(), any())).thenReturn(Mono.just(false));
     }
 
     @Test
@@ -202,7 +208,7 @@ class AnalysisServiceTest {
         staleRun.setTriggeredAt(OffsetDateTime.now().minusMinutes(20));
         when(analysisRunRepo.findById(oldRunId)).thenReturn(Mono.just(staleRun));
         when(analysisRunRepo.updateStatus(eq(oldRunId), eq("FAILED"), any(), anyString()))
-                .thenReturn(Mono.empty());
+                .thenReturn(Mono.just(true));
 
         var newRun = new AnalysisRunRecord();
         newRun.setId(newRunId);
@@ -229,7 +235,7 @@ class AnalysisServiceTest {
         staleRun.setTriggeredAt(OffsetDateTime.now().minusMinutes(20));
         when(analysisRunRepo.findById(runId)).thenReturn(Mono.just(staleRun));
         when(analysisRunRepo.updateStatus(eq(runId), eq("FAILED"), any(), anyString()))
-                .thenReturn(Mono.empty());
+                .thenReturn(Mono.just(true));
 
         StepVerifier.create(analysisSvc.getRun(runId))
                 .assertNext(response -> assertThat(response.status()).isEqualTo("FAILED"))
@@ -268,6 +274,20 @@ class AnalysisServiceTest {
         when(candidateRepo.findByJobRoleId(id)).thenReturn(Flux.just(new CandidateRecord()));
         when(analysisRunRepo.sumUsageSince(any(), any()))
                 .thenReturn(Mono.just(new UsageTotals(1000, 1000, new BigDecimal("5.00"))));
+
+        StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.empty(), null))
+                .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.TOO_MANY_REQUESTS))
+                .verify();
+        verify(analysisRunRepo, never()).insertPending(any(), any());
+    }
+
+    @Test
+    void triggerAnalysis_whenRunAlreadyActiveForKey_throws429() {
+        var id = UUID.randomUUID();
+        when(jobRoleRepo.findById(id)).thenReturn(Mono.just(new JobRoleRecord()));
+        when(candidateRepo.findByJobRoleId(id)).thenReturn(Flux.just(new CandidateRecord()));
+        when(analysisRunRepo.existsActiveRun(any(), any())).thenReturn(Mono.just(true));
 
         StepVerifier.create(analysisSvc.triggerAnalysis(id, Optional.empty(), null))
                 .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())

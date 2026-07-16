@@ -43,13 +43,18 @@ public class AnalysisRunRepository {
                 .limit(1));
     }
 
-    public Mono<Void> updateStatus(UUID id, String status, OffsetDateTime completedAt, String errorMessage) {
+    // Guarded by status NOT IN (...) so this can never clobber a run that has already reached a
+    // terminal state from another writer — e.g. the background worker's completeWithUsage racing
+    // against a client-triggered expireIfStale near the run timeout boundary. Returns whether a row
+    // actually transitioned, so callers can tell a real failure from a no-op.
+    public Mono<Boolean> updateStatus(UUID id, String status, OffsetDateTime completedAt, String errorMessage) {
         return Mono.from(dsl.update(ANALYSIS_RUN)
                         .set(ANALYSIS_RUN.STATUS, status)
                         .set(ANALYSIS_RUN.COMPLETED_AT, completedAt)
                         .set(ANALYSIS_RUN.ERROR_MESSAGE, errorMessage)
-                        .where(ANALYSIS_RUN.ID.eq(id)))
-                .then();
+                        .where(ANALYSIS_RUN.ID.eq(id))
+                        .and(ANALYSIS_RUN.STATUS.notIn("COMPLETED", "FAILED")))
+                .map(rowsAffected -> rowsAffected > 0);
     }
 
     public Mono<Void> updateStatusOnly(UUID id, String status) {
@@ -59,7 +64,9 @@ public class AnalysisRunRepository {
                 .then();
     }
 
-    public Mono<Void> completeWithUsage(
+    // Same terminal-state guard as updateStatus, in the other direction: a slow-but-genuine
+    // completion must not resurrect a run that a concurrent expireIfStale already marked FAILED.
+    public Mono<Boolean> completeWithUsage(
             UUID id, OffsetDateTime completedAt, int promptTokens, int completionTokens, BigDecimal estimatedCostEur) {
         return Mono.from(dsl.update(ANALYSIS_RUN)
                         .set(ANALYSIS_RUN.STATUS, "COMPLETED")
@@ -67,8 +74,24 @@ public class AnalysisRunRepository {
                         .set(ANALYSIS_RUN.PROMPT_TOKENS, promptTokens)
                         .set(ANALYSIS_RUN.COMPLETION_TOKENS, completionTokens)
                         .set(ANALYSIS_RUN.ESTIMATED_COST_EUR, estimatedCostEur)
-                        .where(ANALYSIS_RUN.ID.eq(id)))
-                .then();
+                        .where(ANALYSIS_RUN.ID.eq(id))
+                        .and(ANALYSIS_RUN.STATUS.notIn("COMPLETED", "FAILED")))
+                .map(rowsAffected -> rowsAffected > 0);
+    }
+
+    // Whether a non-terminal (PENDING/RUNNING), non-expired run already exists for this API key (or
+    // for keyless/auth-disabled runs when apiKeyId is null). Used to cap in-flight runs per key at
+    // one, so a burst of concurrent trigger requests can't all bypass the budget check before any of
+    // them completes — completed cost is the only thing sumUsageSince can see (see checkBudget).
+    public Mono<Boolean> existsActiveRun(UUID apiKeyId, OffsetDateTime notExpiredSince) {
+        var keyCondition = apiKeyId == null ? ANALYSIS_RUN.API_KEY_ID.isNull() : ANALYSIS_RUN.API_KEY_ID.eq(apiKeyId);
+        return Mono.from(dsl.selectOne()
+                        .from(ANALYSIS_RUN)
+                        .where(keyCondition)
+                        .and(ANALYSIS_RUN.STATUS.in("PENDING", "RUNNING"))
+                        .and(ANALYSIS_RUN.TRIGGERED_AT.ge(notExpiredSince))
+                        .limit(1))
+                .hasElement();
     }
 
     // Sums token usage and estimated cost across runs triggered since `since`, scoped to a single
