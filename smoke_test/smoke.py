@@ -415,7 +415,7 @@ def main() -> None:
     preflight()
 
     n_roles = len(ROLES)
-    total = 3 + n_roles * 3 + 3  # preflight + (create+upload+analyze) per role + SSE + auth + usage
+    total = 3 + n_roles * 3 + 4  # preflight + (create+upload+analyze) per role + 2x SSE + auth + usage
     step = 1
 
     # 1. Generate PDFs
@@ -476,8 +476,8 @@ def main() -> None:
         if sse_role_id is None:
             sse_role_id = role_id
 
-    # SSE test
-    print(f"[{step}/{total}] SSE - streaming run-status events")
+    # SSE test - round 1
+    print(f"[{step}/{total}] SSE - streaming run-status events (round 1)")
     step += 1
     run = post_json(
         f"/api/job-roles/{sse_role_id}/analyze",
@@ -488,6 +488,23 @@ def main() -> None:
     print(f"  run: {sse_run_id}")
     n = sse_stream_until_terminal(sse_run_id)
     print(f"  ok ({n} events, terminal reached)")
+
+    # SSE test - round 2: a brand-new subscription after round 1's has fully disconnected.
+    # Regression check for a bug where the shared event bus permanently stopped delivering live
+    # events the first time any SSE client's subscriber count returned to zero (exactly what
+    # round 1 just did) -- every SSE request afterward would see only the initial snapshot and
+    # never a live update, hanging until this timeout instead of completing normally.
+    print(f"[{step}/{total}] SSE - streaming run-status events (round 2, after round 1 disconnected)")
+    step += 1
+    run2 = post_json(
+        f"/api/job-roles/{sse_role_id}/analyze",
+        {},
+        headers={"Idempotency-Key": f"smoke-sse-2-{uuid.uuid4()}"},
+    )
+    sse_run_id2 = run2["runId"]
+    print(f"  run: {sse_run_id2}")
+    n2 = sse_stream_until_terminal(sse_run_id2)
+    print(f"  ok ({n2} events, terminal reached)")
 
     # Auth check
     print(f"[{step}/{total}] auth - missing key should return 401")
