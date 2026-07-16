@@ -80,13 +80,22 @@ curl -H "X-API-Key: <API_KEY>" https://resume-scope.ecs.<REGION>.on.aws/api/job-
 
 ## Teardown
 
-The Fargate task and the Express ALB are the only things billed continuously, so the usual "stop paying between demos" move is to delete just the service and redeploy later with one workflow run. [`teardown.sh`](teardown.sh) does this:
+The Fargate task and the Express ALB are billed continuously while the service is up — but so is the
+RDS instance, independent of whether the service exists. Deleting just the service (the plain form
+below) stops the Fargate/ALB cost but **leaves RDS running and billing** (confirmed: ~$0.20/day for an
+idle `db.t4g.micro` outside the free tier). Use `--full` for an actual "stop paying" teardown.
+[`teardown.sh`](teardown.sh):
 
 ```bash
-./deploy/aws/teardown.sh          # delete the ECS Express service (Fargate + ALB) — keeps RDS/ECR/IAM/SSM
+./deploy/aws/teardown.sh          # delete the ECS Express service (Fargate + ALB) — keeps RDS/ECR/IAM/SSM billing
 ./deploy/aws/teardown.sh --full   # also delete the CloudFormation stack (RDS + its data, ECR, IAM) and SSM params → ~$0
 ./deploy/aws/teardown.sh -y       # skip the confirmation prompts
 ```
+
+`STACK_NAME` must match the `--stack-name` you actually used in step 2 above (the script's default is
+`resume-scope`). A mismatched name makes `--full` silently delete nothing — `aws cloudformation
+delete-stack` on a name that doesn't exist is not an error. The script now checks this upfront and
+fails loudly instead: `STACK_NAME=<your-actual-name> ./deploy/aws/teardown.sh --full`.
 
 Redeploy by re-running the **Deploy · AWS (ECS Express)** workflow. After `--full`, first recreate the service-linked role (step 1) and the SSM parameters (step 3).
 
