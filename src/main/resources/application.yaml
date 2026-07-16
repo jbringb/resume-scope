@@ -51,6 +51,23 @@ spring:
 server:
   port: ${PORT:8086}
 
+# Only /actuator/prometheus is exposed (not the full Actuator surface — env, beans, heapdump, etc.
+# stay off). /health above is the unauthenticated platform liveness check every deploy target polls;
+# this is a separate, metrics-only concern. Left unauthenticated for this portfolio deployment (no PII
+# in the metrics themselves — counts and latencies only); a real production deployment would instead
+# bind management on a private port (management.server.port) or put it behind network-level restriction.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: prometheus
+  metrics:
+    distribution:
+      percentiles-histogram:
+        resumescope.analysis.llm.call.duration: true
+      percentiles:
+        resumescope.analysis.llm.call.duration: 0.5,0.95,0.99
+
 security:
   # Shared API key required on /api/** (sent as the X-API-Key header).
   # Empty = auth disabled (local/dev). Set API_KEY in deployed environments.

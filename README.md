@@ -23,6 +23,7 @@ The stack is **reactive end-to-end**: Spring WebFlux on top of jOOQ executed ove
 | AI           | Spring AI 2.0 · OpenAI-compatible (hosted or local vLLM) |
 | Database     | PostgreSQL 17 · jOOQ 3.19 over **R2DBC** (non-blocking) · Flyway 11 (JDBC) |
 | PDF parsing  | Apache PDFBox 3.0.7                       |
+| Observability | Micrometer · Prometheus (`/actuator/prometheus`) |
 | Frontend     | Angular (separate — not yet built)        |
 
 ---
@@ -154,6 +155,32 @@ curl -N -H "X-API-Key: $API_KEY" http://localhost:8086/api/analysis-runs/{runId}
   ]
 }
 ```
+
+---
+
+## Observability
+
+`GET /actuator/prometheus` exposes Micrometer metrics in Prometheus exposition format — unauthenticated,
+like `/health` (metrics contain counts and latencies only, no PII; a real production deployment would
+instead bind management on a private port via `management.server.port`, or restrict it at the network
+level). Only `prometheus` is exposed on `/actuator` — the rest of the Actuator surface (`env`, `beans`,
+`heapdump`, …) stays off.
+
+Alongside the free Spring Boot defaults (`http_server_requests_seconds_*` per route, JVM memory/GC,
+process CPU), four custom business metrics are recorded in `CvAnalyzerService`, tied to the same
+run/token/cost accounting that backs `GET /api/usage/monthly`:
+
+| Metric | Type | Tags | What it shows |
+|---|---|---|---|
+| `resumescope_analysis_runs_total` | counter | `status=completed\|failed` | Run outcome rate |
+| `resumescope_analysis_tokens_total` | counter | `type=prompt\|completion` | Token throughput |
+| `resumescope_analysis_llm_cost_eur_total` | counter | — | Cumulative estimated spend since app start |
+| `resumescope_analysis_llm_call_duration_seconds` | timer (histogram) | `outcome=success\|error` | p50/p95/p99 latency and error rate of the raw OpenAI call |
+
+All tags are fixed, low-cardinality enum values — never a run/candidate id — so the label set can't
+grow unbounded under load. A ready-to-import [Grafana dashboard](deploy/grafana/resumescope-dashboard.json)
+visualizes all of the above; see [`deploy/grafana/README.md`](deploy/grafana/README.md) for a local
+Prometheus + Grafana setup.
 
 ---
 

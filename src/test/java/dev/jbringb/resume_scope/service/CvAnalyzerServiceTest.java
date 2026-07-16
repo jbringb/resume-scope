@@ -21,6 +21,7 @@ import dev.jbringb.resume_scope.repository.AnalysisRepository;
 import dev.jbringb.resume_scope.repository.AnalysisRunRepository;
 import dev.jbringb.resume_scope.repository.CandidateRepository;
 import dev.jbringb.resume_scope.repository.JobRoleRepository;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -59,11 +60,20 @@ class CvAnalyzerServiceTest {
     AnalysisEventBus eventBus;
 
     CvAnalyzerService cvAnalyzerSvc;
+    SimpleMeterRegistry meterRegistry;
 
     @BeforeEach
     void setUp() {
+        meterRegistry = new SimpleMeterRegistry();
         cvAnalyzerSvc = new CvAnalyzerService(
-                chatClient, new ObjectMapper(), jobRoleRepo, candidateRepo, analysisRunRepo, analysisRepo, eventBus);
+                chatClient,
+                new ObjectMapper(),
+                jobRoleRepo,
+                candidateRepo,
+                analysisRunRepo,
+                analysisRepo,
+                eventBus,
+                meterRegistry);
         ReflectionTestUtils.setField(cvAnalyzerSvc, "eurPer1kPromptTokens", new java.math.BigDecimal("0.00014"));
         ReflectionTestUtils.setField(cvAnalyzerSvc, "eurPer1kCompletionTokens", new java.math.BigDecimal("0.00055"));
     }
@@ -92,6 +102,12 @@ class CvAnalyzerServiceTest {
         verify(analysisRunRepo)
                 .updateStatus(eq(runId), eq("FAILED"), any(OffsetDateTime.class), eq("Job role not found"));
         verify(candidateRepo, never()).findByJobRoleId(any());
+        assertThat(meterRegistry
+                        .get("resumescope.analysis.runs")
+                        .tag("status", "failed")
+                        .counter()
+                        .count())
+                .isEqualTo(1.0);
     }
 
     @Test
@@ -126,6 +142,19 @@ class CvAnalyzerServiceTest {
         order.verify(analysisRepo).updateRank(aliceAnalysisId, 1);
         order.verify(analysisRepo).updateRank(bobAnalysisId, 2);
         verify(analysisRunRepo).completeWithUsage(eq(runId), any(OffsetDateTime.class), anyInt(), anyInt(), any());
+
+        assertThat(meterRegistry
+                        .get("resumescope.analysis.runs")
+                        .tag("status", "completed")
+                        .counter()
+                        .count())
+                .isEqualTo(1.0);
+        assertThat(meterRegistry
+                        .get("resumescope.analysis.llm.call.duration")
+                        .tag("outcome", "success")
+                        .timer()
+                        .count())
+                .isEqualTo(2); // one LLM call per candidate (alice, bob)
     }
 
     @Test

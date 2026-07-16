@@ -10,6 +10,8 @@ import dev.jbringb.resume_scope.repository.AnalysisRepository;
 import dev.jbringb.resume_scope.repository.AnalysisRunRepository;
 import dev.jbringb.resume_scope.repository.CandidateRepository;
 import dev.jbringb.resume_scope.repository.JobRoleRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
@@ -39,6 +41,7 @@ public class CvAnalyzerService {
     private final AnalysisRunRepository analysisRunRepo;
     private final AnalysisRepository analysisRepo;
     private final AnalysisEventBus eventBus;
+    private final MeterRegistry meterRegistry;
 
     // Supplies the JSON-schema format instructions appended to the prompt and parses the reply into a
     // CvAnalysisResult — robust JSON extraction in place of hand-rolled fence stripping. Initialized
@@ -98,6 +101,7 @@ public class CvAnalyzerService {
                         .concatMap(candidate -> analyzeAndInsert(role, candidate, runId))
                         .reduce(TokenUsage.ZERO, TokenUsage::plus)
                         .flatMap(usage -> applyRanks(runId).thenReturn(usage))
+                        .doOnNext(this::recordRunCompleted)
                         .flatMap(usage -> analysisRunRepo.completeWithUsage(
                                 runId,
                                 OffsetDateTime.now(),
@@ -105,6 +109,22 @@ public class CvAnalyzerService {
                                 usage.completionTokens(),
                                 usage.estimatedCostEur(eurPer1kPromptTokens, eurPer1kCompletionTokens)))
                         .then(publishRun(runId)));
+    }
+
+    // Business metrics, scraped at /actuator/prometheus. Tags are fixed, low-cardinality enum values
+    // only (status/type/outcome) — never an id — so the metric's label set can never grow unbounded.
+    private void recordRunCompleted(TokenUsage usage) {
+        meterRegistry
+                .counter("resumescope.analysis.runs", "status", "completed")
+                .increment();
+        meterRegistry.counter("resumescope.analysis.tokens", "type", "prompt").increment(usage.promptTokens());
+        meterRegistry
+                .counter("resumescope.analysis.tokens", "type", "completion")
+                .increment(usage.completionTokens());
+        meterRegistry
+                .counter("resumescope.analysis.llm.cost.eur")
+                .increment(usage.estimatedCostEur(eurPer1kPromptTokens, eurPer1kCompletionTokens)
+                        .doubleValue());
     }
 
     private Mono<TokenUsage> analyzeAndInsert(JobRoleRecord role, CandidateRecord candidate, UUID runId) {
@@ -135,6 +155,7 @@ public class CvAnalyzerService {
     }
 
     private Mono<Void> failRun(UUID runId, String message) {
+        meterRegistry.counter("resumescope.analysis.runs", "status", "failed").increment();
         return analysisRunRepo
                 .updateStatus(runId, "FAILED", OffsetDateTime.now(), message)
                 .then(publishRun(runId));
@@ -186,11 +207,7 @@ public class CvAnalyzerService {
     private Mono<LlmResult> analyzeWithLlm(JobRoleRecord role, CandidateRecord candidate, String cvText) {
         return Mono.fromCallable(() -> {
                     String prompt = buildUserPrompt(role, candidate, cvText);
-                    ChatResponse response =
-                            chatClient.prompt().user(prompt).call().chatResponse();
-                    if (response == null) {
-                        throw new IllegalStateException("LLM returned no response");
-                    }
+                    ChatResponse response = callLlm(prompt);
                     String raw = response.getResult().getOutput().getText();
                     CvAnalysisResult parsed = outputConverter.convert(raw == null ? "" : raw);
                     if (parsed == null) {
@@ -213,6 +230,25 @@ public class CvAnalyzerService {
                     return new LlmResult(analysis, promptTokens, completionTokens);
                 })
                 .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    // Times the raw OpenAI call in isolation (excludes prompt building / response parsing), tagged by
+    // outcome — shows the external dependency's own latency and error rate separately from app-side
+    // processing. Histogram buckets for this timer are enabled in application.yaml so Prometheus can
+    // compute p50/p95/p99, not just an average.
+    private ChatResponse callLlm(String prompt) {
+        Timer.Sample sample = Timer.start(meterRegistry);
+        try {
+            ChatResponse response = chatClient.prompt().user(prompt).call().chatResponse();
+            if (response == null) {
+                throw new IllegalStateException("LLM returned no response");
+            }
+            sample.stop(meterRegistry.timer("resumescope.analysis.llm.call.duration", "outcome", "success"));
+            return response;
+        } catch (RuntimeException e) {
+            sample.stop(meterRegistry.timer("resumescope.analysis.llm.call.duration", "outcome", "error"));
+            throw e;
+        }
     }
 
     // Builds the prompt with two prompt-injection defenses: a system-style preamble telling the model
