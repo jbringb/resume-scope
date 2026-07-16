@@ -14,10 +14,15 @@ spring:
     sql-dialect: postgres
 
   # Render errors as RFC 7807 application/problem+json. The GlobalExceptionHandler
-  # extends this for validation field errors and unexpected failures.
+  # extends this for validation field errors and unexpected failures. multipart.* is a
+  # framework-level backstop for CV uploads, in addition to the hard cap enforced in
+  # CandidateService (20MB per file) — rejects an oversized part before it's even fully read.
   webflux:
     problemdetails:
       enabled: true
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 50MB
 
   flyway:
     enabled:   true

@@ -8,6 +8,7 @@ import dev.jbringb.resume_scope.repository.JobRoleRepository;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.io.buffer.DataBufferLimitException;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.codec.multipart.FilePart;
@@ -20,6 +21,11 @@ import reactor.core.scheduler.Schedulers;
 @Service
 @RequiredArgsConstructor
 public class CandidateService {
+
+    // Hard cap on a single uploaded file, enforced in code (not just spring.webflux.multipart.*
+    // config) so a single huge file can never be buffered whole into JVM heap regardless of how
+    // multipart parsing is configured.
+    private static final int MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
     private final JobRoleRepository jobRoleRepo;
     private final CandidateRepository candidateRepo;
@@ -62,13 +68,20 @@ public class CandidateService {
     }
 
     private Mono<FileBytes> readFilePart(FilePart part) {
-        return DataBufferUtils.join(part.content()).map(dataBuffer -> {
-            byte[] bytes = new byte[dataBuffer.readableByteCount()];
-            dataBuffer.read(bytes);
-            DataBufferUtils.release(dataBuffer);
-            String name = part.filename() != null ? part.filename() : "cv.pdf";
-            return new FileBytes(bytes, name);
-        });
+        return DataBufferUtils.join(part.content(), MAX_UPLOAD_BYTES)
+                .onErrorMap(
+                        DataBufferLimitException.class,
+                        e -> new ResponseStatusException(
+                                HttpStatus.CONTENT_TOO_LARGE,
+                                "File exceeds the %dMB upload limit: %s"
+                                        .formatted(MAX_UPLOAD_BYTES / (1024 * 1024), part.filename())))
+                .map(dataBuffer -> {
+                    byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                    dataBuffer.read(bytes);
+                    DataBufferUtils.release(dataBuffer);
+                    String name = part.filename() != null ? part.filename() : "cv.pdf";
+                    return new FileBytes(bytes, name);
+                });
     }
 
     /** PDF parts only; reject empty or non-pdf names with a 400. */
