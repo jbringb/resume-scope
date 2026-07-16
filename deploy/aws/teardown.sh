@@ -42,6 +42,21 @@ account="$(aws sts get-caller-identity --query Account --output text)"
 service_arn="arn:aws:ecs:${REGION}:${account}:service/${CLUSTER}/${SERVICE}"
 echo "Account ${account} · region ${REGION}"
 
+# `cloudformation delete-stack` on a name that doesn't exist succeeds silently and deletes
+# nothing — a wrong STACK_NAME would otherwise look like a successful teardown while RDS keeps
+# billing. Fail loud instead, before the (irreversible) delete-stack call below.
+if [ "${FULL}" = 1 ]; then
+  if ! aws cloudformation describe-stacks --stack-name "${STACK}" --region "${REGION}" \
+      --query 'Stacks[0].StackStatus' --output text >/dev/null 2>&1; then
+    echo "ERROR: no CloudFormation stack named '${STACK}' in region ${REGION} — nothing would be deleted." >&2
+    echo "Stacks that do exist in this account/region:" >&2
+    aws cloudformation describe-stacks --region "${REGION}" \
+      --query 'Stacks[].StackName' --output text >&2 || true
+    echo "Re-run with the correct name: STACK_NAME=<name> $0 --full" >&2
+    exit 1
+  fi
+fi
+
 echo
 echo "Deleting the ECS Express service '${SERVICE}' removes its Fargate tasks AND the Express ALB"
 echo "(both billed continuously). RDS/ECR/IAM/SSM are left in place for a quick redeploy."
@@ -60,10 +75,15 @@ if [ "${FULL}" = 1 ]; then
   echo "roles in CloudFormation stack '${STACK}', plus the /resume-scope/* SSM parameters."
   if confirm "Proceed with full teardown?"; then
     for p in openai_api_key api_key db_password; do
-      if aws ssm delete-parameter --name "/resume-scope/${p}" --region "${REGION}" --no-cli-pager 2>/dev/null; then
+      # Distinguish "genuinely already gone" (ParameterNotFound) from any other failure — a
+      # swallowed real error (throttling, a stale session, ...) must not be reported as success.
+      err="$(aws ssm delete-parameter --name "/resume-scope/${p}" --region "${REGION}" --no-cli-pager 2>&1 >/dev/null || true)"
+      if [ -z "${err}" ]; then
         echo "deleted SSM /resume-scope/${p}"
-      else
+      elif echo "${err}" | grep -q "ParameterNotFound"; then
         echo "(SSM /resume-scope/${p} already gone)"
+      else
+        echo "WARNING: failed to delete SSM /resume-scope/${p}: ${err}" >&2
       fi
     done
     aws cloudformation delete-stack --stack-name "${STACK}" --region "${REGION}"
