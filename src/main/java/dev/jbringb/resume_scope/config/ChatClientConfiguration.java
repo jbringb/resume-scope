@@ -1,9 +1,9 @@
 package dev.jbringb.resume_scope.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import tools.jackson.databind.ObjectMapper;
 
 @Configuration
 public class ChatClientConfiguration {

@@ -9,10 +9,10 @@ ResumeScope is an AI-powered CV/resume analysis API. An admin creates a **job ro
 ## Tech stack
 
 - **Build:** Gradle, **Java 25** toolchain
-- **Framework:** Spring Boot **4.0.4**, Spring **WebFlux** — reactive **end-to-end** (jOOQ over R2DBC; no `Mono.fromCallable` wrapping of blocking DB calls)
+- **Framework:** Spring Boot **4.1.0**, Spring **WebFlux** — reactive **end-to-end** (jOOQ over R2DBC; no `Mono.fromCallable` wrapping of blocking DB calls)
 - **AI:** Spring AI **2.0.0-M3**, OpenAI starter — model `gpt-4o-mini`, temperature `0.0`. Swappable to a local OpenAI-compatible server (vLLM) via the `local-vllm` profile.
 - **Persistence:** PostgreSQL + **jOOQ 3.19** (type-safe SQL) executed **reactively over R2DBC** at runtime (`r2dbc-postgresql`; repos return `Mono`/`Flux`). **Flyway 11** runs migrations over a **JDBC** connection at startup (`spring.flyway.url`; Flyway has no R2DBC support). The jOOQ `DSLContext` is built from the R2DBC `ConnectionFactory` in `config/PersistenceConfiguration` (this makes Boot's JDBC jOOQ auto-config back off). jOOQ **codegen** parses the Flyway migration SQL directly (`DDLDatabase`, no live database) and outputs to `build/generated-jooq` — **not committed**, regenerated on every build.
-- **PDF:** Apache PDFBox 3.0.7
+- **PDF:** Apache PDFBox 3.0.8
 - **Observability:** Micrometer + `micrometer-registry-prometheus`, scraped at `GET /actuator/prometheus` (only endpoint exposed — see `application.yaml`'s `management.*`). Four custom business metrics live in `CvAnalyzerService` (`resumescope.analysis.runs`, `.tokens`, `.llm.cost.eur`, `.llm.call.duration`); see the README's Observability section and `deploy/grafana/`.
 - **Boilerplate:** Lombok
 - **Formatting:** Spotless 8.8 with Palantir Java Format (120-col)

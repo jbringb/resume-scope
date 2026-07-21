@@ -1,7 +1,6 @@
 package dev.jbringb.resume_scope.service;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.jbringb.resume_scope.api.dto.AnalysisRunResponse;
 import dev.jbringb.resume_scope.db.generated.tables.records.AnalysisRunRecord;
 import dev.jbringb.resume_scope.db.generated.tables.records.CandidateRecord;
@@ -28,6 +27,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import tools.jackson.databind.ObjectMapper;
 
 @Service
 @RequiredArgsConstructor

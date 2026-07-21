@@ -1,7 +1,5 @@
 package dev.jbringb.resume_scope.service;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.jbringb.resume_scope.api.dto.AnalysisRunResponse;
 import dev.jbringb.resume_scope.api.dto.CandidateResultResponse;
 import dev.jbringb.resume_scope.api.dto.JobRoleResultsResponse;
@@ -32,6 +30,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 
 @Service
 @RequiredArgsConstructor

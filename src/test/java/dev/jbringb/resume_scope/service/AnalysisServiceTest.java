@@ -11,7 +11,6 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.jbringb.resume_scope.db.generated.tables.records.AnalysisRunRecord;
 import dev.jbringb.resume_scope.db.generated.tables.records.ApiKeyRecord;
 import dev.jbringb.resume_scope.db.generated.tables.records.CandidateRecord;
@@ -39,6 +38,7 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+import tools.jackson.databind.ObjectMapper;
 
 @ExtendWith(MockitoExtension.class)
 class AnalysisServiceTest {

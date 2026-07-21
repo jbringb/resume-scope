@@ -12,7 +12,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.jbringb.resume_scope.db.generated.tables.records.AnalysisRecord;
 import dev.jbringb.resume_scope.db.generated.tables.records.AnalysisRunRecord;
 import dev.jbringb.resume_scope.db.generated.tables.records.CandidateRecord;
@@ -37,6 +36,7 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import tools.jackson.databind.ObjectMapper;
 
 @ExtendWith(MockitoExtension.class)
 class CvAnalyzerServiceTest {
