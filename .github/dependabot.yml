@@ -17,6 +17,12 @@ updates:
       gradle-minor-and-patch:
         patterns:
           - "*"
+        # jOOQ's codegen crashes on 3.21.x / nu.studer.jooq 10.2.x (confirmed, not yet fixed) — excluded
+        # from the group so a broken jOOQ bump can never again get silently bundled with safe updates
+        # and fail the whole group's CI. Still surfaces as its own PR to revisit when it's fixed upstream.
+        exclude-patterns:
+          - "nu.studer.jooq"
+          - "org.jooq:*"
         update-types:
           - minor
           - patch
