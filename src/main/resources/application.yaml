@@ -35,13 +35,13 @@ spring:
     openai:
       api-key:  ${OPENAI_API_KEY:change-me}
       # Defaults to OpenAI; override base-url + model to use any OpenAI-compatible
-      # provider (e.g. Groq, OpenRouter, a local vLLM). base-url is the host only —
-      # Spring AI appends /v1/chat/completions, so do not include /v1.
-      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+      # provider (e.g. Groq, OpenRouter, a local vLLM). Since Spring AI 2.0 (official
+      # openai-java SDK), base-url must include /v1 yourself — the SDK no longer appends
+      # it. Omitting /v1 here 404s against the real API (confirmed against 2.0.0 GA).
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
       chat:
-        options:
-          model:       ${OPENAI_MODEL:gpt-4o-mini}
-          temperature: 0.0
+        model:       ${OPENAI_MODEL:gpt-4o-mini}
+        temperature: 0.0
 
   codec:
     max-in-memory-size: 50MB

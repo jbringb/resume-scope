@@ -37,7 +37,7 @@ services:
       SPRING_PROFILES_ACTIVE: ""
       # Sourced from smoke_test/.env via `docker compose --env-file`.
       OPENAI_API_KEY:  ${OPENAI_API_KEY:?set in smoke_test/.env}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_MODEL:    ${OPENAI_MODEL:-gpt-4o-mini}
       # Optional: enables DB-backed API key auth. When set, ApiKeySeeder seeds
       # this value as the "default" key and ApiKeyAuthFilter enforces the header.

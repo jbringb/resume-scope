@@ -191,7 +191,7 @@ All config lives in `src/main/resources/application.yaml`. Key environment varia
 | Variable         | Description                     | Default         |
 |------------------|---------------------------------|-----------------|
 | `OPENAI_API_KEY` | API key (OpenAI or any OpenAI-compatible provider) | `change-me` in `application.yaml`; `local-dummy` in `local-vllm` profile |
-| `OPENAI_BASE_URL`| Provider host (no `/v1` — Spring AI appends it). Override to use Groq / OpenRouter / vLLM. | `https://api.openai.com` |
+| `OPENAI_BASE_URL`| Provider base URL, **including `/v1`** (Spring AI 2.0's official openai-java SDK no longer appends it). Override to use Groq / OpenRouter / vLLM. | `https://api.openai.com/v1` |
 | `OPENAI_MODEL`   | Chat model id | `gpt-4o-mini` |
 | `API_KEY`        | Seeds a default API key on startup (sent as the `X-API-Key` header). Empty = auth disabled. | empty (open) |
 | `ANALYSIS_COST_EUR_PER_1K_PROMPT_TOKENS` | EUR price per 1,000 prompt tokens, for cost estimation | `0.00014` (approximates `gpt-4o-mini`) |
@@ -217,7 +217,7 @@ For any **OpenAI-compatible** provider (Groq, OpenRouter, Together, a local vLLM
 
 ### Local inference (vLLM)
 
-Use the `local-vllm` Spring profile to send chat completions to a **local OpenAI-compatible** server ([vLLM](https://docs.vllm.ai/)) instead of the public OpenAI API. Defaults in [`application-local-vllm.yaml`](src/main/resources/application-local-vllm.yaml) use **`http://localhost:8000`** as the API host (Spring AI adds **`/v1/chat/completions`**; do not put `/v1` in `base-url` or you get **`/v1/v1/...`**). Default model **`Qwen/Qwen3-4B-Instruct-2507`**.
+Use the `local-vllm` Spring profile to send chat completions to a **local OpenAI-compatible** server ([vLLM](https://docs.vllm.ai/)) instead of the public OpenAI API. Defaults in [`application-local-vllm.yaml`](src/main/resources/application-local-vllm.yaml) use **`http://localhost:8000/v1`** as the base URL (Spring AI 2.0's official openai-java SDK no longer appends `/v1` itself, so `base-url` must include it). Default model **`Qwen/Qwen3-4B-Instruct-2507`**.
 
 1. Complete [First-time Setup](#first-time-setup) (PostgreSQL, Flyway, jOOQ) as usual.
 2. Start vLLM (GPU). Example (PowerShell — set `cachePath` to your Hugging Face cache dir):
@@ -235,7 +235,7 @@ Use the `local-vllm` Spring profile to send chat completions to a **local OpenAI
      --max-model-len 8192
    ```
 
-   vLLM serves the OpenAI-compatible API at **`http://localhost:8000/v1/...`** on the host; set **`OPENAI_BASE_URL=http://localhost:8000`** for Spring AI (see [vLLM OpenAI-compatible server](https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html)).
+   vLLM serves the OpenAI-compatible API at **`http://localhost:8000/v1/...`** on the host; set **`OPENAI_BASE_URL=http://localhost:8000/v1`** for Spring AI (see [vLLM OpenAI-compatible server](https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html)).
 
 3. Run the app with the profile active:
 
@@ -254,7 +254,7 @@ Use the `local-vllm` Spring profile to send chat completions to a **local OpenAI
 
    | Variable           | Description |
    |--------------------|-------------|
-   | `OPENAI_BASE_URL`  | API host only, e.g. `http://localhost:8000` (no `/v1`; Spring AI adds the path) |
+   | `OPENAI_BASE_URL`  | Base URL including `/v1`, e.g. `http://localhost:8000/v1` (the SDK no longer appends it) |
    | `OPENAI_MODEL`     | Model id **exactly** as passed to vLLM `--model` |
    | `OPENAI_API_KEY`   | Dummy is fine locally (`local-dummy` in profile) |
 
@@ -271,7 +271,7 @@ Use the `local-vllm` Spring profile to send chat completions to a **local OpenAI
 docker compose up --build
 ```
 
-**Local vLLM on the host:** Inside the container, `localhost` is not your machine. Set **`OPENAI_BASE_URL=http://host.docker.internal:8000`** (still no `/v1`). Compose already maps `host.docker.internal` to the host gateway (`extra_hosts: host.docker.internal:host-gateway`), so it resolves to the host on Linux, macOS, and Windows alike.
+**Local vLLM on the host:** Inside the container, `localhost` is not your machine. Set **`OPENAI_BASE_URL=http://host.docker.internal:8000/v1`** (still needs `/v1`). Compose already maps `host.docker.internal` to the host gateway (`extra_hosts: host.docker.internal:host-gateway`), so it resolves to the host on Linux, macOS, and Windows alike.
 
 ---
 
