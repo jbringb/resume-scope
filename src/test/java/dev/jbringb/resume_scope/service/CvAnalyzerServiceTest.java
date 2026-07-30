@@ -223,6 +223,42 @@ class CvAnalyzerServiceTest {
         verify(analysisRepo).insert(any(), any(), eq(100), any(), any(), any(), any(), any(), any(), any());
     }
 
+    // Regression guard for the Jackson 2->3 migration: CvAnalysisResult is annotated
+    // @JsonIgnoreProperties(ignoreUnknown = true) specifically so an LLM reply carrying a field the
+    // record doesn't declare (a real risk — models append stray commentary/reasoning fields) doesn't
+    // fail the whole analysis. This exercises the real, non-mocked BeanOutputConverter/Jackson 3
+    // ObjectMapper (only chatClient is mocked), so it proves the annotation still works today rather
+    // than just asserting on the shape the app itself controls.
+    @Test
+    void processAnalysisRun_toleratesUnexpectedFieldInLlmReply() {
+        var runId = UUID.randomUUID();
+        var jobRoleId = UUID.randomUUID();
+        when(analysisRunRepo.findById(runId)).thenReturn(Mono.just(pendingRun(runId, jobRoleId)));
+        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Mono.just(jobRole(jobRoleId, "Engineer")));
+        when(analysisRunRepo.updateStatusOnly(runId, "RUNNING")).thenReturn(Mono.empty());
+        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(Flux.just(candidate()));
+
+        stubLlmResponse(
+                """
+                {"overallScore":75,"strengths":["Java"],"weaknesses":[],"summary":"Good","recommendation":"Hire",\
+                "extractedName":"Alice","extractedEmail":"alice@example.com","modelConfidence":"high"}
+                """);
+
+        var analysisId = UUID.randomUUID();
+        when(analysisRepo.insert(any(), any(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(Mono.just(analysisId));
+        when(analysisRepo.updateRank(any(), anyInt())).thenReturn(Mono.empty());
+        when(analysisRepo.findByAnalysisRunIdOrderByScoreDesc(runId)).thenReturn(Flux.just(analysisRecord(analysisId)));
+        when(analysisRunRepo.completeWithUsage(eq(runId), any(), anyInt(), anyInt(), any()))
+                .thenReturn(Mono.empty());
+
+        cvAnalyzerSvc.processAnalysisRun(runId).block();
+
+        // The unexpected "modelConfidence" field must be silently ignored, not fail the run.
+        verify(analysisRepo).insert(any(), any(), eq(75), any(), any(), any(), any(), any(), any(), any());
+        verify(analysisRunRepo, never()).updateStatus(eq(runId), eq("FAILED"), any(), any());
+    }
+
     @Test
     void promptInjectionScanner_flagsManipulativeText_andIgnoresCleanText() {
         assertThat(CvAnalyzerService.looksLikePromptInjection(

@@ -121,7 +121,14 @@ class AnalysisFlowIntegrationTest {
                 .jsonPath("$.results[0].overallScore")
                 .isEqualTo(88)
                 .jsonPath("$.results[0].rank")
-                .isEqualTo(1);
+                .isEqualTo(1)
+                // Round-trips the real (non-mocked) Jackson 3 ObjectMapper through a real Postgres
+                // JSONB column: CvAnalyzerService.jsonArray writes this list, AnalysisService.
+                // parseJsonArray reads it back — regression guard for the Jackson 2->3 migration.
+                .jsonPath("$.results[0].strengths[0]")
+                .isEqualTo("Java")
+                .jsonPath("$.results[0].weaknesses")
+                .isEqualTo(java.util.List.of());
     }
 
     @Test
