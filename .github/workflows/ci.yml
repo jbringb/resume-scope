@@ -22,7 +22,7 @@ jobs:
           java-version: "25"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v6.2.0
 
       # jOOQ codegen parses the Flyway migration SQL directly (no live database),
       # so no database is needed: spotlessCheck, tests, and build run offline.
