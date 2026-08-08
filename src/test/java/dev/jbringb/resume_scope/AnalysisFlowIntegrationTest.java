@@ -191,6 +191,29 @@ class AnalysisFlowIntegrationTest {
     }
 
     @Test
+    void createJobRole_missingDescriptionOrRequirements_returnsProblemJsonWithFieldErrors() {
+        web.post()
+                .uri("/api/job-roles")
+                .bodyValue(new java.util.LinkedHashMap<>() {
+                    {
+                        put("title", "Backend Engineer");
+                        put("description", "");
+                        put("requirements", "  ");
+                    }
+                })
+                .exchange()
+                .expectStatus()
+                .isBadRequest()
+                .expectHeader()
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .expectBody()
+                .jsonPath("$.errors[?(@.field=='description')]")
+                .exists()
+                .jsonPath("$.errors[?(@.field=='requirements')]")
+                .exists();
+    }
+
+    @Test
     void unknownRole_returnsProblemJsonNotFound() {
         web.get()
                 .uri("/api/job-roles/{id}", UUID.randomUUID())
