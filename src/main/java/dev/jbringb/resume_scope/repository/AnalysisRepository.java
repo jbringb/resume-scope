@@ -66,9 +66,12 @@ public class AnalysisRepository {
                 .then();
     }
 
+    // Secondary sort key makes rank assignment deterministic: without it, Postgres doesn't guarantee
+    // any particular order among tied overall_score rows (they could reorder across repeated runs of
+    // the identical query). ID isn't meaningful (a random UUID), just stable — that's all this needs.
     public Flux<AnalysisRecord> findByAnalysisRunIdOrderByScoreDesc(UUID analysisRunId) {
         return Flux.from(dsl.selectFrom(ANALYSIS)
                 .where(ANALYSIS.ANALYSIS_RUN_ID.eq(analysisRunId))
-                .orderBy(ANALYSIS.OVERALL_SCORE.desc()));
+                .orderBy(ANALYSIS.OVERALL_SCORE.desc(), ANALYSIS.ID.asc()));
     }
 }
