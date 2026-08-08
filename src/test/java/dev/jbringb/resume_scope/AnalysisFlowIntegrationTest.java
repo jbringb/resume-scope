@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import dev.jbringb.resume_scope.api.dto.AnalysisRunResponse;
+import dev.jbringb.resume_scope.api.dto.CandidateResponse;
 import dev.jbringb.resume_scope.api.dto.JobRoleResponse;
 import dev.jbringb.resume_scope.api.dto.TriggerAnalysisResponse;
 import java.io.ByteArrayOutputStream;
@@ -154,6 +155,39 @@ class AnalysisFlowIntegrationTest {
                 .isEqualTo(400)
                 .jsonPath("$.errors[0].field")
                 .isEqualTo("title");
+    }
+
+    @Test
+    void deleteJobRole_returnsNoContent() {
+        UUID roleId = createJobRole();
+
+        web.delete()
+                .uri("/api/job-roles/{id}", roleId)
+                .exchange()
+                .expectStatus()
+                .isNoContent();
+
+        web.get().uri("/api/job-roles/{id}", roleId).exchange().expectStatus().isNotFound();
+    }
+
+    @Test
+    void deleteCandidate_returnsNoContent() throws Exception {
+        UUID roleId = createJobRole();
+        uploadPdf(roleId);
+        UUID candidateId = web.get()
+                .uri("/api/job-roles/{id}/candidates", roleId)
+                .exchange()
+                .expectBodyList(CandidateResponse.class)
+                .returnResult()
+                .getResponseBody()
+                .get(0)
+                .id();
+
+        web.delete()
+                .uri("/api/job-roles/{roleId}/candidates/{candidateId}", roleId, candidateId)
+                .exchange()
+                .expectStatus()
+                .isNoContent();
     }
 
     @Test
