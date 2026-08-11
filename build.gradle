@@ -56,7 +56,7 @@ dependencies {
     // JDBC driver: Flyway migrations at runtime only (jOOQ codegen reads the migration SQL directly).
     runtimeOnly 'org.postgresql:postgresql'
     runtimeOnly 'org.postgresql:r2dbc-postgresql'
-    jooqGenerator 'org.jooq:jooq-meta-extensions:3.19.30'
+    jooqGenerator 'org.jooq:jooq-meta-extensions:3.21.7'
 
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
