@@ -3,6 +3,7 @@ package dev.jbringb.resume_scope.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import dev.jbringb.resume_scope.db.generated.tables.records.JobRoleRecord;
@@ -35,11 +36,14 @@ class CandidateServiceTest {
     @Mock
     PdfTextExtractor pdfTextExtractor;
 
+    @Mock
+    TransactionRunner transactionRunner;
+
     CandidateService candidateSvc;
 
     @BeforeEach
     void setUp() {
-        candidateSvc = new CandidateService(jobRoleRepo, candidateRepo, pdfTextExtractor);
+        candidateSvc = new CandidateService(jobRoleRepo, candidateRepo, pdfTextExtractor, transactionRunner);
     }
 
     // Real bytes over the 20MB cap, not a mocked exception — proves DataBufferUtils.join's
@@ -56,6 +60,27 @@ class CandidateServiceTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
                         .isEqualTo(HttpStatus.CONTENT_TOO_LARGE));
+    }
+
+    // Regression guard for the non-atomic-upload fix: validation (extension check, size cap) must
+    // fully complete before any DB write is attempted, so a bad file anywhere in the batch can never
+    // leave an earlier, valid file in the same batch already committed.
+    @Test
+    void uploadPdfs_whenAnyFileFailsValidation_neverOpensTransaction() {
+        var jobRoleId = UUID.randomUUID();
+        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Mono.just(new JobRoleRecord()));
+
+        FilePart badExtension = mock(FilePart.class);
+        when(badExtension.filename()).thenReturn("notes.txt");
+
+        assertThatThrownBy(() -> candidateSvc
+                        .uploadPdfs(jobRoleId, Flux.just(badExtension))
+                        .block())
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.BAD_REQUEST));
+
+        verifyNoInteractions(transactionRunner);
     }
 
     private static FilePart oversizedPdfPart(String filename) {

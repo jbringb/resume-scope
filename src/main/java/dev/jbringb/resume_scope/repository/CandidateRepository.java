@@ -23,8 +23,15 @@ public class CandidateRepository {
     }
 
     public Mono<CandidateRecord> insert(UUID jobRoleId, String originalFilename, String cvText) {
+        return insert(dsl, jobRoleId, originalFilename, cvText);
+    }
+
+    // For a caller running inside an explicit transaction (e.g. an atomic multi-file upload) — must
+    // use the SAME DSLContext the transaction was opened on, not this repository's own connection,
+    // or the insert would auto-commit independently and the transaction couldn't roll it back.
+    public Mono<CandidateRecord> insert(DSLContext ctx, UUID jobRoleId, String originalFilename, String cvText) {
         return Mono.from(
-                dsl.insertInto(CANDIDATE, CANDIDATE.JOB_ROLE_ID, CANDIDATE.ORIGINAL_FILENAME, CANDIDATE.CV_TEXT)
+                ctx.insertInto(CANDIDATE, CANDIDATE.JOB_ROLE_ID, CANDIDATE.ORIGINAL_FILENAME, CANDIDATE.CV_TEXT)
                         .values(jobRoleId, originalFilename, cvText)
                         .returning());
     }

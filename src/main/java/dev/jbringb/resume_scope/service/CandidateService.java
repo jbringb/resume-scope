@@ -30,6 +30,7 @@ public class CandidateService {
     private final JobRoleRepository jobRoleRepo;
     private final CandidateRepository candidateRepo;
     private final PdfTextExtractor pdfTextExtractor;
+    private final TransactionRunner transactionRunner;
 
     public Mono<List<CandidateResponse>> list(UUID jobRoleId) {
         return ensureJobRole(jobRoleId)
@@ -38,13 +39,21 @@ public class CandidateService {
                 .collectList();
     }
 
+    // Reads and text-extracts every file before any DB write, so a bad extension or a corrupt PDF
+    // anywhere in the batch fails the whole upload with zero writes. The N inserts then run in one
+    // transaction, so a failure among them (e.g. a filename over the DB's length limit) rolls back
+    // every insert in this batch too — either all candidates in the request are created, or none
+    // are; a retry can never create duplicates for files that "silently" succeeded on a prior
+    // partial failure.
     public Mono<List<CandidateResponse>> uploadPdfs(UUID jobRoleId, Flux<FilePart> files) {
         return ensureJobRole(jobRoleId)
                 .thenMany(files.concatMap(this::readFileBytes))
-                .concatMap(fb -> extractText(fb.bytes())
-                        .flatMap(text -> candidateRepo.insert(jobRoleId, fb.filename(), text))
-                        .map(this::toDto))
-                .collectList();
+                .concatMap(fb -> extractText(fb.bytes()).map(text -> new FileWithText(fb.filename(), text)))
+                .collectList()
+                .flatMap(filesWithText -> transactionRunner.runInTransaction(ctx -> Flux.fromIterable(filesWithText)
+                        .concatMap(f -> candidateRepo.insert(ctx, jobRoleId, f.filename(), f.text()))
+                        .map(this::toDto)
+                        .collectList()));
     }
 
     public Mono<Void> delete(UUID jobRoleId, UUID candidateId) {
@@ -98,4 +107,6 @@ public class CandidateService {
     }
 
     private record FileBytes(byte[] bytes, String filename) {}
+
+    private record FileWithText(String filename, String text) {}
 }

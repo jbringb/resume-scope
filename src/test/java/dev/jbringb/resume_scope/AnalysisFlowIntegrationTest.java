@@ -213,6 +213,48 @@ class AnalysisFlowIntegrationTest {
                 .exists();
     }
 
+    // Real Postgres rollback proof (not a mock): original_filename is VARCHAR(500), so the second
+    // file's insert genuinely violates the DB constraint inside the transaction. Proves the FIRST
+    // file's insert — which would have succeeded on its own — gets rolled back too, not just that
+    // no further files get inserted after the failure.
+    @Test
+    void uploadPdfs_whenOneFileViolatesDbConstraint_rollsBackTheWholeBatch() throws Exception {
+        UUID roleId = createJobRole();
+        String tooLongFilename = "x".repeat(600) + ".pdf";
+
+        var builder = new MultipartBodyBuilder();
+        builder.part("files", new ByteArrayResource(samplePdf()) {
+                    @Override
+                    public String getFilename() {
+                        return "alice.pdf";
+                    }
+                })
+                .contentType(MediaType.APPLICATION_PDF);
+        builder.part("files", new ByteArrayResource(samplePdf()) {
+                    @Override
+                    public String getFilename() {
+                        return tooLongFilename;
+                    }
+                })
+                .contentType(MediaType.APPLICATION_PDF);
+
+        web.post()
+                .uri("/api/job-roles/{id}/candidates", roleId)
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .body(BodyInserters.fromMultipartData(builder.build()))
+                .exchange()
+                .expectStatus()
+                .isEqualTo(500);
+
+        web.get()
+                .uri("/api/job-roles/{id}/candidates", roleId)
+                .exchange()
+                .expectStatus()
+                .isOk()
+                .expectBodyList(CandidateResponse.class)
+                .hasSize(0);
+    }
+
     @Test
     void unknownRole_returnsProblemJsonNotFound() {
         web.get()
