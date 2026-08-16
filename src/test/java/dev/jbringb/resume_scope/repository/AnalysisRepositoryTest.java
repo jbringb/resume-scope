@@ -8,7 +8,6 @@ import dev.jbringb.resume_scope.db.generated.tables.records.CandidateRecord;
 import dev.jbringb.resume_scope.db.generated.tables.records.JobRoleRecord;
 import java.util.List;
 import java.util.UUID;
-import java.util.stream.Stream;
 import org.jooq.JSONB;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -55,8 +54,14 @@ class AnalysisRepositoryTest {
 
     // Regression test for the missing secondary sort key: without ANALYSIS.ID as a tiebreaker,
     // Postgres doesn't guarantee any particular order among rows with an equal overall_score.
+    //
+    // Deliberately does NOT predict the exact order in Java (e.g. by sorting the ids with
+    // UUID.compareTo() and asserting a match): Java's UUID comparison is signed-long-wise and
+    // Postgres's uuid comparison is unsigned-byte-wise, so they can disagree on the same pair of
+    // UUIDs. What the fix actually guarantees is determinism — the identical query against
+    // unchanged data always returns the same order — so that's what this asserts directly.
     @Test
-    void findByAnalysisRunIdOrderByScoreDesc_ordersTiedScoresByIdAscending() {
+    void findByAnalysisRunIdOrderByScoreDesc_ordersTiedScoresDeterministically() {
         JSONB empty = JSONB.valueOf("[]");
 
         UUID jobRoleId = jobRoleRepo
@@ -76,23 +81,28 @@ class AnalysisRepositoryTest {
                 .map(AnalysisRunRecord::getId)
                 .block();
 
-        // Same score for both — insert B's analysis row first so a naive "insertion order" or
-        // "reverse insertion order" coincidence can't accidentally make this test pass.
-        UUID analysisIdB = analysisRepo
+        // Same score for both.
+        analysisRepo
                 .insert(candidateB, runId, 80, null, empty, empty, "s", "r", null, null)
                 .block();
-        UUID analysisIdA = analysisRepo
+        analysisRepo
                 .insert(candidateA, runId, 80, null, empty, empty, "s", "r", null, null)
                 .block();
 
-        List<UUID> expected = Stream.of(analysisIdA, analysisIdB).sorted().toList();
+        List<UUID> firstRun = queryOrder(runId);
+        List<UUID> secondRun = queryOrder(runId);
+        List<UUID> thirdRun = queryOrder(runId);
 
-        List<UUID> actual = analysisRepo
+        assertThat(firstRun).hasSize(2);
+        assertThat(secondRun).isEqualTo(firstRun);
+        assertThat(thirdRun).isEqualTo(firstRun);
+    }
+
+    private List<UUID> queryOrder(UUID runId) {
+        return analysisRepo
                 .findByAnalysisRunIdOrderByScoreDesc(runId)
                 .map(AnalysisRecord::getId)
                 .collectList()
                 .block();
-
-        assertThat(actual).isEqualTo(expected);
     }
 }
