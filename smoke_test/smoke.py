@@ -331,6 +331,52 @@ def check_auth() -> None:
         print(f"  ok (401 + problem+json)")
 
 
+def check_upload_atomicity(job_role_id: str) -> None:
+    """Uploading a batch where one file's filename violates the DB's VARCHAR(500) limit must roll
+    back the WHOLE batch, not just stop before inserting that one file -- proves the multi-file
+    upload transaction is genuinely atomic against the real, self-built Docker image (the Java
+    integration test already proves this against Testcontainers Postgres; this confirms the same
+    guarantee survives packaging and deployment)."""
+    alice_bytes = (SCRIPT_DIR / "alice.pdf").read_bytes()
+    too_long_filename = "x" * 600 + ".pdf"  # candidate.original_filename is VARCHAR(500)
+
+    boundary = uuid.uuid4().hex
+    parts = []
+    for filename in ("atomicity-valid.pdf", too_long_filename):
+        parts.append(
+            f'--{boundary}\r\n'
+            f'Content-Disposition: form-data; name="files"; filename="{filename}"\r\n'
+            f'Content-Type: application/pdf\r\n\r\n'.encode()
+            + alice_bytes
+            + b'\r\n'
+        )
+    body = b''.join(parts) + f'--{boundary}--\r\n'.encode()
+    req = urllib.request.Request(
+        f"{BASE_URL}/api/job-roles/{job_role_id}/candidates",
+        data=body,
+        method="POST",
+        headers=_auth_headers({"Content-Type": f"multipart/form-data; boundary={boundary}"}),
+    )
+    try:
+        urllib.request.urlopen(req, timeout=30)
+        print("ERROR: expected the upload to fail (filename over the DB limit) but it succeeded")
+        sys.exit(1)
+    except urllib.error.HTTPError as e:
+        if e.code < 500:
+            print(f"ERROR: expected a 5xx failure from the DB constraint violation, got {e.code}")
+            sys.exit(1)
+        status = e.code
+
+    candidates = get(f"/api/job-roles/{job_role_id}/candidates")
+    if candidates:
+        print(
+            f"ERROR: upload failed with {status} but {len(candidates)} candidate(s) still exist "
+            f"-- the batch was NOT rolled back atomically"
+        )
+        sys.exit(1)
+    print(f"  ok (batch rejected with {status}, 0 candidates persisted)")
+
+
 def check_monthly_usage() -> None:
     """Verify GET /api/usage/monthly returns sane values after the analyses above."""
     data = get("/api/usage/monthly")
@@ -415,7 +461,7 @@ def main() -> None:
     preflight()
 
     n_roles = len(ROLES)
-    total = 3 + n_roles * 3 + 4  # preflight + (create+upload+analyze) per role + 2x SSE + auth + usage
+    total = 3 + n_roles * 3 + 5  # preflight + (create+upload+analyze) per role + 2x SSE + atomicity + auth + usage
     step = 1
 
     # 1. Generate PDFs
@@ -505,6 +551,20 @@ def main() -> None:
     print(f"  run: {sse_run_id2}")
     n2 = sse_stream_until_terminal(sse_run_id2)
     print(f"  ok ({n2} events, terminal reached)")
+
+    # Upload atomicity check - a batch with one DB-constraint-violating filename must roll back
+    # in full against the real, self-built Docker image (not just the Testcontainers test context).
+    print(f"[{step}/{total}] upload atomicity - one bad filename must roll back the whole batch")
+    step += 1
+    atomicity_role = post_json(
+        "/api/job-roles",
+        {
+            "title": "Atomicity Check",
+            "description": "throwaway role for the upload-atomicity smoke check",
+            "requirements": "n/a",
+        },
+    )
+    check_upload_atomicity(atomicity_role["id"])
 
     # Auth check
     print(f"[{step}/{total}] auth - missing key should return 401")
