@@ -27,6 +27,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.client.ChatClient;
@@ -258,6 +259,34 @@ class CvAnalyzerServiceTest {
         verify(analysisRunRepo, never()).updateStatus(eq(runId), eq("FAILED"), any(), any());
     }
 
+    // The schema-generated output format only says overallScore is an integer, so without an explicit
+    // range in the prompt the model drifted to a 0-10 scale (a strong match scored 10).
+    @Test
+    void processAnalysisRun_promptStatesZeroToHundredScoreScale() {
+        var runId = UUID.randomUUID();
+        var jobRoleId = UUID.randomUUID();
+        when(analysisRunRepo.findById(runId)).thenReturn(Mono.just(pendingRun(runId, jobRoleId)));
+        when(jobRoleRepo.findById(jobRoleId)).thenReturn(Mono.just(jobRole(jobRoleId, "Engineer")));
+        when(analysisRunRepo.updateStatusOnly(runId, "RUNNING")).thenReturn(Mono.empty());
+        when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(Flux.just(candidate()));
+
+        var spec = stubLlmResponse(cvJson(80, "Alice", "alice@example.com"));
+
+        var analysisId = UUID.randomUUID();
+        when(analysisRepo.insert(any(), any(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(Mono.just(analysisId));
+        when(analysisRepo.updateRank(any(), anyInt())).thenReturn(Mono.empty());
+        when(analysisRepo.findByAnalysisRunIdOrderByScoreDesc(runId)).thenReturn(Flux.just(analysisRecord(analysisId)));
+        when(analysisRunRepo.completeWithUsage(eq(runId), any(), anyInt(), anyInt(), any()))
+                .thenReturn(Mono.empty());
+
+        cvAnalyzerSvc.processAnalysisRun(runId).block();
+
+        var prompt = ArgumentCaptor.forClass(String.class);
+        verify(spec).user(prompt.capture());
+        assertThat(prompt.getValue()).contains("overallScore").contains("from 0 to 100");
+    }
+
     @Test
     void promptInjectionScanner_flagsManipulativeText_andIgnoresCleanText() {
         assertThat(CvAnalyzerService.looksLikePromptInjection(
@@ -270,7 +299,7 @@ class CvAnalyzerServiceTest {
         assertThat(CvAnalyzerService.looksLikePromptInjection(null)).isFalse();
     }
 
-    private void stubLlmResponse(String first, String... rest) {
+    private ChatClient.ChatClientRequestSpec stubLlmResponse(String first, String... rest) {
         var spec = mock(ChatClient.ChatClientRequestSpec.class);
         var call = mock(ChatClient.CallResponseSpec.class);
         when(chatClient.prompt()).thenReturn(spec);
@@ -283,6 +312,7 @@ class CvAnalyzerServiceTest {
         }
         when(call.chatResponse())
                 .thenReturn(responses[0], java.util.Arrays.copyOfRange(responses, 1, responses.length));
+        return spec;
     }
 
     private static ChatResponse chatResponseWith(String text) {
