@@ -32,9 +32,9 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.reactive.function.BodyInserters;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
@@ -50,7 +50,7 @@ class AnalysisFlowIntegrationTest {
     private static final Set<String> TERMINAL = Set.of("COMPLETED", "FAILED");
 
     @Container
-    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17-alpine")
+    static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17-alpine")
             .withDatabaseName("resumescope")
             .withUsername("resumescope")
             .withPassword("resumescope");
@@ -62,8 +62,10 @@ class AnalysisFlowIntegrationTest {
         registry.add("spring.flyway.user", postgres::getUsername);
         registry.add("spring.flyway.password", postgres::getPassword);
         // jOOQ runtime (R2DBC)
-        registry.add("spring.r2dbc.url", () -> "r2dbc:postgresql://%s:%d/%s"
-                .formatted(postgres.getHost(), postgres.getFirstMappedPort(), postgres.getDatabaseName()));
+        registry.add(
+                "spring.r2dbc.url",
+                () -> "r2dbc:postgresql://%s:%d/%s"
+                        .formatted(postgres.getHost(), postgres.getFirstMappedPort(), postgres.getDatabaseName()));
         registry.add("spring.r2dbc.username", postgres::getUsername);
         registry.add("spring.r2dbc.password", postgres::getPassword);
     }
@@ -81,8 +83,7 @@ class AnalysisFlowIntegrationTest {
         when(chatClient.prompt()).thenReturn(spec);
         when(spec.user(anyString())).thenReturn(spec);
         when(spec.call()).thenReturn(call);
-        var reply =
-                """
+        var reply = """
                 {"overallScore":88,"strengths":["Java"],"weaknesses":[],"summary":"Strong","recommendation":"Hire","extractedName":"Alice","extractedEmail":"alice@example.com"}
                 """;
         when(call.chatResponse())

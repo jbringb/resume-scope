@@ -8,9 +8,9 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Exercises the DB-backed API key flow end to end against a real Postgres: the legacy
@@ -26,7 +26,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class ApiKeyFlowIntegrationTest {
 
     @Container
-    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17-alpine")
+    static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17-alpine")
             .withDatabaseName("resumescope")
             .withUsername("resumescope")
             .withPassword("resumescope");
@@ -36,8 +36,10 @@ class ApiKeyFlowIntegrationTest {
         registry.add("spring.flyway.url", postgres::getJdbcUrl);
         registry.add("spring.flyway.user", postgres::getUsername);
         registry.add("spring.flyway.password", postgres::getPassword);
-        registry.add("spring.r2dbc.url", () -> "r2dbc:postgresql://%s:%d/%s"
-                .formatted(postgres.getHost(), postgres.getFirstMappedPort(), postgres.getDatabaseName()));
+        registry.add(
+                "spring.r2dbc.url",
+                () -> "r2dbc:postgresql://%s:%d/%s"
+                        .formatted(postgres.getHost(), postgres.getFirstMappedPort(), postgres.getDatabaseName()));
         registry.add("spring.r2dbc.username", postgres::getUsername);
         registry.add("spring.r2dbc.password", postgres::getPassword);
     }

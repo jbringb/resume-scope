@@ -238,8 +238,7 @@ class CvAnalyzerServiceTest {
         when(analysisRunRepo.updateStatusOnly(runId, "RUNNING")).thenReturn(Mono.empty());
         when(candidateRepo.findByJobRoleId(jobRoleId)).thenReturn(Flux.just(candidate()));
 
-        stubLlmResponse(
-                """
+        stubLlmResponse("""
                 {"overallScore":75,"strengths":["Java"],"weaknesses":[],"summary":"Good","recommendation":"Hire",\
                 "extractedName":"Alice","extractedEmail":"alice@example.com","modelConfidence":"high"}
                 """);
@@ -295,8 +294,7 @@ class CvAnalyzerServiceTest {
         String emailVal = email != null ? "\"" + email + "\"" : "null";
         return """
                 {"overallScore":%d,"strengths":["Java"],"weaknesses":[],"summary":"Good","recommendation":"Hire","extractedName":%s,"extractedEmail":%s}
-                """
-                .formatted(score, nameVal, emailVal);
+                """.formatted(score, nameVal, emailVal);
     }
 
     private static AnalysisRunRecord pendingRun(UUID id, UUID jobRoleId) {

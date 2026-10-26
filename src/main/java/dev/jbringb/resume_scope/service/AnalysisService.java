@@ -96,15 +96,17 @@ public class AnalysisService {
     }
 
     private Mono<TriggerAnalysisResponse> newRunWithMapping(UUID jobRoleId, String key, UUID apiKeyId) {
-        return insertRunAndSchedule(jobRoleId, apiKeyId).flatMap(resp -> analysisTriggerIdempotencyRepo
-                .insert(jobRoleId, key, resp.runId())
-                .thenReturn(resp));
+        return insertRunAndSchedule(jobRoleId, apiKeyId)
+                .flatMap(resp -> analysisTriggerIdempotencyRepo
+                        .insert(jobRoleId, key, resp.runId())
+                        .thenReturn(resp));
     }
 
     private Mono<TriggerAnalysisResponse> newRunRepointing(UUID jobRoleId, String key, UUID apiKeyId) {
-        return insertRunAndSchedule(jobRoleId, apiKeyId).flatMap(resp -> analysisTriggerIdempotencyRepo
-                .repoint(jobRoleId, key, resp.runId())
-                .thenReturn(resp));
+        return insertRunAndSchedule(jobRoleId, apiKeyId)
+                .flatMap(resp -> analysisTriggerIdempotencyRepo
+                        .repoint(jobRoleId, key, resp.runId())
+                        .thenReturn(resp));
     }
 
     private boolean isActive(AnalysisRunRecord run) {
@@ -187,16 +189,18 @@ public class AnalysisService {
 
     public Mono<MonthlyUsageResponse> monthlyUsage(UUID apiKeyId) {
         var periodStart = currentMonthStart();
-        return analysisRunRepo.sumUsageSince(periodStart, apiKeyId).flatMap(usage -> resolveBudgetAndName(apiKeyId)
-                .map(budgetAndName -> new MonthlyUsageResponse(
-                        periodStart,
-                        usage.promptTokens(),
-                        usage.completionTokens(),
-                        usage.promptTokens() + usage.completionTokens(),
-                        usage.estimatedCostEur(),
-                        budgetAndName.budget(),
-                        usage.estimatedCostEur().compareTo(budgetAndName.budget()) >= 0,
-                        budgetAndName.name())));
+        return analysisRunRepo
+                .sumUsageSince(periodStart, apiKeyId)
+                .flatMap(usage -> resolveBudgetAndName(apiKeyId)
+                        .map(budgetAndName -> new MonthlyUsageResponse(
+                                periodStart,
+                                usage.promptTokens(),
+                                usage.completionTokens(),
+                                usage.promptTokens() + usage.completionTokens(),
+                                usage.estimatedCostEur(),
+                                budgetAndName.budget(),
+                                usage.estimatedCostEur().compareTo(budgetAndName.budget()) >= 0,
+                                budgetAndName.name())));
     }
 
     // Resolves the effective monthly budget for a request: the key's own override if set, otherwise

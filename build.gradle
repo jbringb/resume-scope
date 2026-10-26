@@ -3,17 +3,17 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath 'org.flywaydb:flyway-database-postgresql:11.14.1'
+        classpath 'org.flywaydb:flyway-database-postgresql:12.4.0'
     }
 }
 
 plugins {
     id 'java'
-    id 'org.springframework.boot' version '4.1.0'
+    id 'org.springframework.boot' version '4.1.2'
     id 'io.spring.dependency-management' version '1.1.7'
-    id 'nu.studer.jooq' version '10.0'
-    id 'org.flywaydb.flyway' version '11.14.1'
-    id 'com.diffplug.spotless' version '8.9.0'
+    id 'nu.studer.jooq' version '10.2.1'
+    id 'org.flywaydb.flyway' version '12.4.0'
+    id 'com.diffplug.spotless' version '8.10.4'
 }
 
 group = 'dev.jbringb'
@@ -38,7 +38,12 @@ repositories {
 
 dependencyManagement {
     imports {
-        mavenBom "org.springframework.ai:spring-ai-bom:2.0.0"
+        mavenBom "org.springframework.ai:spring-ai-bom:2.0.2"
+    }
+    dependencies {
+        // r2dbc-postgresql still pulls SCRAM 3.2 (GHSA-p9jg-fcr6-3mhf: channel-binding downgrade) — drop once it ships ≥ 3.3.
+        dependency 'com.ongres.scram:scram-client:3.4'
+        dependency 'com.ongres.scram:scram-common:3.4'
     }
 }
 
@@ -56,7 +61,7 @@ dependencies {
     // JDBC driver: Flyway migrations at runtime only (jOOQ codegen reads the migration SQL directly).
     runtimeOnly 'org.postgresql:postgresql'
     runtimeOnly 'org.postgresql:r2dbc-postgresql'
-    jooqGenerator 'org.jooq:jooq-meta-extensions:3.19.30'
+    jooqGenerator 'org.jooq:jooq-meta-extensions:3.21.9'
 
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
@@ -69,8 +74,8 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-starter-webflux-test'
     testImplementation 'io.projectreactor:reactor-test'
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
-    testImplementation 'org.testcontainers:junit-jupiter:1.21.4'
-    testImplementation 'org.testcontainers:postgresql:1.21.4'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.testcontainers:testcontainers-postgresql'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
@@ -86,7 +91,7 @@ flyway {
 }
 
 jooq {
-    version = '3.19.30'
+    version = '3.21.9'
     configurations {
         main {
             // Codegen reads the Flyway migration SQL directly (DDLDatabase) instead of connecting to a
@@ -160,7 +165,7 @@ tasks.named('test') {
 
 spotless {
     java {
-        palantirJavaFormat('2.71.0')
+        palantirJavaFormat('2.102.0')
         target 'src/**/*.java'
     }
 }

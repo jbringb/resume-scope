@@ -14,9 +14,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /** Repository-level, no web layer needed — verifies real Postgres ordering behavior against a mock. */
 @SpringBootTest
@@ -24,7 +24,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class AnalysisRepositoryTest {
 
     @Container
-    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17-alpine")
+    static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17-alpine")
             .withDatabaseName("resumescope")
             .withUsername("resumescope")
             .withPassword("resumescope");
@@ -34,8 +34,10 @@ class AnalysisRepositoryTest {
         registry.add("spring.flyway.url", postgres::getJdbcUrl);
         registry.add("spring.flyway.user", postgres::getUsername);
         registry.add("spring.flyway.password", postgres::getPassword);
-        registry.add("spring.r2dbc.url", () -> "r2dbc:postgresql://%s:%d/%s"
-                .formatted(postgres.getHost(), postgres.getFirstMappedPort(), postgres.getDatabaseName()));
+        registry.add(
+                "spring.r2dbc.url",
+                () -> "r2dbc:postgresql://%s:%d/%s"
+                        .formatted(postgres.getHost(), postgres.getFirstMappedPort(), postgres.getDatabaseName()));
         registry.add("spring.r2dbc.username", postgres::getUsername);
         registry.add("spring.r2dbc.password", postgres::getPassword);
     }

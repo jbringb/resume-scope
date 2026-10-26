@@ -17,15 +17,19 @@ updates:
       gradle-minor-and-patch:
         patterns:
           - "*"
-        # jOOQ's codegen crashes on 3.21.x / nu.studer.jooq 10.2.x (confirmed, not yet fixed) — excluded
-        # from the group so a broken jOOQ bump can never again get silently bundled with safe updates
-        # and fail the whole group's CI. Still surfaces as its own PR to revisit when it's fixed upstream.
+        # jOOQ gets its own PR: its codegen version must match the jOOQ version Spring Boot manages
+        # (spring-boot-dependencies' jooq.version), so it's reviewed alongside Boot bumps, not bundled.
         exclude-patterns:
           - "nu.studer.jooq"
           - "org.jooq:*"
         update-types:
           - minor
           - patch
+    # The Gradle Flyway plugin (local `flywayMigrate` only) is pinned to the Flyway version Spring Boot
+    # manages at runtime; a major plugin bump ahead of Boot would migrate with a different Flyway.
+    ignore:
+      - dependency-name: "org.flywaydb*"
+        update-types: ["version-update:semver-major"]
 
   # GitHub Actions pinned in the workflows
   - package-ecosystem: github-actions

@@ -290,8 +290,7 @@ public class CvAnalyzerService {
                 %1$s
 
                 %7$s
-                """
-                .formatted(
+                """.formatted(
                         fence,
                         role.getTitle(),
                         role.getDescription() == null ? "" : role.getDescription(),
