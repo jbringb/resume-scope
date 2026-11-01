@@ -26,10 +26,10 @@ updates:
           - minor
           - patch
     # The Gradle Flyway plugin (local `flywayMigrate` only) is pinned to the Flyway version Spring Boot
-    # manages at runtime; a major plugin bump ahead of Boot would migrate with a different Flyway.
+    # manages at runtime; any plugin bump ahead of Boot would migrate with a different Flyway. Bump it by
+    # hand to match spring-boot-dependencies' flyway.version whenever Boot is upgraded.
     ignore:
       - dependency-name: "org.flywaydb*"
-        update-types: ["version-update:semver-major"]
 
   # GitHub Actions pinned in the workflows
   - package-ecosystem: github-actions
