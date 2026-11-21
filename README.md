@@ -19,7 +19,7 @@ The stack is **reactive end-to-end**: Spring WebFlux on top of jOOQ executed ove
 
 | Layer        | Technology                                |
 |--------------|-------------------------------------------|
-| Backend      | Spring Boot 4.1 · WebFlux (reactive) · Java 25 |
+| Backend      | Spring Boot 4.2 · WebFlux (reactive) · Java 25 |
 | AI           | Spring AI 2.0 · OpenAI-compatible (hosted or local vLLM) |
 | Database     | PostgreSQL 17 · jOOQ 3.21 over **R2DBC** (non-blocking) · Flyway 12 (JDBC) |
 | PDF parsing  | Apache PDFBox 3.0.8                       |

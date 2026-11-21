@@ -3,17 +3,17 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath 'org.flywaydb:flyway-database-postgresql:12.4.0'
+        classpath 'org.flywaydb:flyway-database-postgresql:12.11.0'
     }
 }
 
 plugins {
     id 'java'
-    id 'org.springframework.boot' version '4.1.2'
+    id 'org.springframework.boot' version '4.2.0'
     id 'io.spring.dependency-management' version '1.1.7'
     id 'nu.studer.jooq' version '10.2.1'
-    id 'org.flywaydb.flyway' version '12.4.0'
-    id 'com.diffplug.spotless' version '8.10.4'
+    id 'org.flywaydb.flyway' version '12.11.0'
+    id 'com.diffplug.spotless' version '8.12.0'
 }
 
 group = 'dev.jbringb'
@@ -38,7 +38,7 @@ repositories {
 
 dependencyManagement {
     imports {
-        mavenBom "org.springframework.ai:spring-ai-bom:2.0.2"
+        mavenBom "org.springframework.ai:spring-ai-bom:2.1.0"
     }
     dependencies {
         // r2dbc-postgresql still pulls SCRAM 3.2 (GHSA-p9jg-fcr6-3mhf: channel-binding downgrade) — drop once it ships ≥ 3.3.
@@ -165,7 +165,7 @@ tasks.named('test') {
 
 spotless {
     java {
-        palantirJavaFormat('2.102.0')
+        palantirJavaFormat('2.103.0')
         target 'src/**/*.java'
     }
 }
