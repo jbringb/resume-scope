@@ -4,7 +4,7 @@ Guidance for AI coding agents in this repository. When you change something this
 
 ## What this is
 
-ResumeScope is an AI-powered CV analysis API. An admin creates a **job role**, uploads candidate **PDFs** and triggers an **analysis run**. A background LLM call scores each CV 0–100 against the role, extracts name and email, lists strengths and weaknesses, and the candidates are **ranked** by score.
+ResumeScope is an AI-powered CV analysis API with an Angular frontend in `web/`. An admin creates a **job role**, uploads candidate **PDFs** and triggers an **analysis run**. A background LLM call scores each CV 0–100 against the role, extracts name and email, lists strengths and weaknesses, and the candidates are **ranked** by score.
 
 ## Tech stack
 
@@ -13,7 +13,8 @@ ResumeScope is an AI-powered CV analysis API. An admin creates a **job role**, u
 - **Spring AI 2**, OpenAI `gpt-4o-mini` at temperature `0.0`. The `local-vllm` profile swaps in any OpenAI-compatible server.
 - **PostgreSQL**: queries via **jOOQ over R2DBC** (repos return `Mono`/`Flux`); migrations via **Flyway over JDBC** at startup (Flyway has no R2DBC support).
 - **Jackson 3**, **Testcontainers 2**, JUnit 5 + Mockito + AssertJ, PDFBox 3, Lombok, Micrometer + Prometheus, Spotless + Palantir Java Format (120 columns).
-- Exact versions live in [build.gradle](build.gradle) and Spring Boot's BOM. Don't copy version numbers into this file; they go stale.
+- **Frontend (`web/`):** Angular 22 (zoneless, signals, Signal Forms) + Angular Material, a typed API client generated from `openapi.json`, Vitest, ESLint and Prettier. Rules are in [web/CLAUDE.md](web/CLAUDE.md).
+- Exact versions live in [build.gradle](build.gradle) and Spring Boot's BOM, and in [web/package.json](web/package.json) for the frontend. Don't copy version numbers into this file; they go stale.
 
 ## Layout
 
@@ -32,9 +33,11 @@ Root package `dev.jbringb.resume_scope`:
   - `PersistenceConfiguration`: the jOOQ `DSLContext` built on the R2DBC `ConnectionFactory`, which makes Boot's JDBC jOOQ auto-config back off.
   - `ApiKeyAuthFilter`, `ApiKeySeeder`, `ApiKeyHashing`.
   - `GlobalExceptionHandler`: errors as `ProblemDetail`.
+  - `SpaFallbackFilter`: serves `index.html` for the Angular app's client-side routes; never for `/api`, `/actuator`, `/health` or file paths.
 - `pdf/PdfTextExtractor`: PDFBox to text.
 - `db/generated/`: jOOQ code generated into `build/generated-jooq` on every compile from the migration SQL (no database needed). Not committed; never edit it.
 - Migrations: `src/main/resources/db/migration/V<n>__<desc>.sql`. API contract: `src/main/resources/static/openapi.json` (served at `/openapi.json`).
+- `web/`: the Angular frontend. The Docker image builds it into `static/`, so the API serves it at `/`.
 - `smoke_test/`: end-to-end smoke test and scoring eval (Python). `deploy/`: AWS and Render deployment plus Grafana dashboards.
 
 ## How an analysis runs
@@ -82,7 +85,7 @@ Root package `dev.jbringb.resume_scope`:
 ## Golden rules
 
 1. **Schema change → new Flyway migration, then `./gradlew generateJooq`** (reads the SQL, no database needed). See the `add-db-migration` skill.
-2. **REST change → update `openapi.json` in the same change.** See the `add-rest-endpoint` skill.
+2. **REST change → update `openapi.json` in the same change.** See the `add-rest-endpoint` skill. The frontend's typed client is generated from it, so also run the `web/` build (see below) to catch a breaking change.
 3. **Format before finishing:** `./gradlew spotlessApply`. CI runs `spotlessCheck`.
 4. **Never edit `db/generated/**`.** It's regenerated on every build, and edits are silently lost.
 5. **Never point jOOQ codegen's `target.directory` at hand-written sources.** Its cleanup once deleted every non-generated file under `src/main/java`.
@@ -98,6 +101,8 @@ Root package `dev.jbringb.resume_scope`:
   - Needs `smoke_test/.env` with `OPENAI_API_KEY` and `pip install reportlab`.
   - It also fails when scores break `smoke_test/scoring.py`.
   - Also available as the manual **Smoke Test** GitHub workflow.
+- **Frontend (`web/`) or `openapi.json` change:** in `web/`, run `npm run format && npm run lint && npm test -- --watch=false && npm run build`. CI's **Frontend** job runs the same steps.
+- **Dockerfile or `SpaFallbackFilter` change:** run the smoke test (it builds the image), then load `/` and a deep link such as `/job-roles` in the browser.
 
 ## Skills (`.claude/skills/`)
 
@@ -118,11 +123,13 @@ docker compose up -d postgres                 # Postgres (resumescope/resumescop
 OPENAI_API_KEY=sk-... ./gradlew bootRun       # app on :8086; health: GET /health
 ./gradlew test                                # all tests (three classes need Docker)
 ./gradlew bootJar                             # build/libs/resume-scope.jar
-docker compose up --build                     # full stack; the image compiles from source
+docker compose up --build                     # full stack incl. the frontend at :8086; the image compiles from source
+cd web && npm ci && npm start                 # frontend dev server on :4200, proxies /api etc. to :8086
 ```
 
 - Local LLM: start vLLM on `:8000`, then `SPRING_PROFILES_ACTIVE=local-vllm ./gradlew bootRun`.
-- The [`Dockerfile`](Dockerfile) is multi-stage and self-building (no host jar, no database during the build). Every deployment target (Render, AWS) builds it; see the README's Deployments section.
+- The [`Dockerfile`](Dockerfile) is multi-stage and self-building: Angular build (Node) → boot jar (JDK, with the Angular output copied into `static/`) → JRE runtime. No host build and no database are needed during the build. Every deployment target (Render, AWS) builds it; see the README's Deployments section.
+- `./gradlew bootRun` alone serves no frontend, since `static/` only gets it inside Docker. Use `npm start` in `web/` instead.
 
 ## Config and environment
 

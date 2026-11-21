@@ -1,6 +1,10 @@
 # Build context for the self-building multi-stage Dockerfile.
-# The image compiles the boot jar from source, so keep src/, gradle/, gradlew,
-# build.gradle and settings.gradle — exclude everything else.
+# The image compiles the Angular app and the boot jar from source, so keep web/, src/,
+# gradle/, gradlew, build.gradle and settings.gradle — exclude everything else.
+web/node_modules
+web/dist
+web/.angular
+web/src/app/api/generated
 .git
 .github
 .gradle

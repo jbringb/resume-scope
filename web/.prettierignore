@@ -1,0 +1,6 @@
+# Generated or installed
+/src/app/api/generated/
+/dist/
+/.angular/
+/node_modules/
+package-lock.json

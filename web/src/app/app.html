@@ -1,0 +1,48 @@
+<mat-toolbar class="toolbar">
+  @if (handset()) {
+    <button mat-icon-button aria-label="Toggle navigation" (click)="drawer.toggle()">
+      <mat-icon>menu</mat-icon>
+    </button>
+  }
+  <a class="brand" routerLink="/">ResumeScope</a>
+  <span class="spacer"></span>
+  <span class="api-status" [class]="apiStatus()" role="status">
+    <mat-icon aria-hidden="true">{{
+      apiStatus() === 'online' ? 'cloud_done' : 'cloud_off'
+    }}</mat-icon>
+    API {{ apiStatus() }}
+  </span>
+</mat-toolbar>
+
+<mat-sidenav-container class="container">
+  <mat-sidenav
+    #drawer
+    class="sidenav"
+    [mode]="handset() ? 'over' : 'side'"
+    [opened]="!handset()"
+    [attr.role]="handset() ? 'dialog' : 'navigation'"
+  >
+    <mat-nav-list aria-label="Main navigation">
+      @for (item of nav; track item.path) {
+        <a
+          mat-list-item
+          [routerLink]="item.path"
+          routerLinkActive
+          #rla="routerLinkActive"
+          [activated]="rla.isActive"
+          [attr.aria-current]="rla.isActive ? 'page' : null"
+          (click)="handset() && drawer.close()"
+        >
+          <mat-icon matListItemIcon aria-hidden="true">{{ item.icon }}</mat-icon>
+          <span matListItemTitle>{{ item.label }}</span>
+        </a>
+      }
+    </mat-nav-list>
+  </mat-sidenav>
+
+  <mat-sidenav-content>
+    <main class="content">
+      <router-outlet />
+    </main>
+  </mat-sidenav-content>
+</mat-sidenav-container>

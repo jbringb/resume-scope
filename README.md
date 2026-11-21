@@ -24,13 +24,13 @@ The stack is **reactive end-to-end**: Spring WebFlux on top of jOOQ executed ove
 | Database     | PostgreSQL 17 · jOOQ 3.21 over **R2DBC** (non-blocking) · Flyway 12 (JDBC) |
 | PDF parsing  | Apache PDFBox 3.0.8                       |
 | Observability | Micrometer · Prometheus (`/actuator/prometheus`) |
-| Frontend     | Angular (separate — not yet built)        |
+| Frontend     | Angular 22 (zoneless, signals) · Angular Material · typed client generated from `openapi.json` ([`web/`](web/README.md), shell only so far) |
 
 ---
 
 ## Deployments
 
-The [Dockerfile](Dockerfile) is **self-building** (it compiles the boot jar from source inside the image — no local build step). Deploys are triggered manually via GitHub Actions (`workflow_dispatch`). See:
+The [Dockerfile](Dockerfile) is **self-building**: it compiles the Angular frontend and the boot jar from source inside the image, with no local build step. The API serves the frontend at `/`. Deploys are triggered manually via GitHub Actions (`workflow_dispatch`). See:
 
 - [Render.com](deploy/render/README.md) — Blueprint [`render.yaml`](render.yaml) (Docker web service + free Postgres), deployed via [`deploy-render.yml`](.github/workflows/deploy-render.yml)
 - [AWS — ECS Express Mode](deploy/aws/README.md) — ECR image push + Fargate service + auto ALB/HTTPS, deployed via [`deploy-aws.yml`](.github/workflows/deploy-aws.yml)
@@ -289,6 +289,16 @@ OPENAI_API_KEY=sk-... ./gradlew bootRun
 ```
 
 ---
+
+## Frontend
+
+An Angular app lives in [`web/`](web/README.md). So far it's a shell: layout, navigation, an API-key settings page and a typed API client generated from `openapi.json`. The feature pages are placeholders.
+
+```bash
+cd web && npm ci && npm start   # http://localhost:4200, proxies /api to the backend on :8086
+```
+
+In Docker (and on Render and AWS), the image builds the app into Spring Boot's `static/`, so it's served at the API's own address, for example `http://localhost:8086/`.
 
 ## Testing & Code Quality
 

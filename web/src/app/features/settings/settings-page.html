@@ -1,0 +1,37 @@
+<h1>Settings</h1>
+
+<mat-card appearance="outlined">
+  <mat-card-header>
+    <mat-card-title>API key</mat-card-title>
+    <mat-card-subtitle>
+      Sent as <code>X-API-Key</code> on every API call. Kept in this browser tab only.
+    </mat-card-subtitle>
+  </mat-card-header>
+
+  <form (submit)="save($event)">
+    <mat-card-content>
+      <mat-form-field appearance="outline" class="key-field">
+        <mat-label>API key</mat-label>
+        <input matInput type="password" autocomplete="off" [formField]="settingsForm.apiKey" />
+        <mat-hint>Leave empty if the server runs without authentication.</mat-hint>
+      </mat-form-field>
+
+      <p class="check" role="status">
+        @if (check().state === 'checking') {
+          Checking connection…
+        } @else if (usage(); as usage) {
+          Connected. This month: {{ usage.estimatedCostEur | currency: 'EUR' }} of
+          {{ usage.monthlyBudgetEur | currency: 'EUR' }} budget.
+        } @else if (check().state === 'failed') {
+          Connection failed.
+        }
+      </p>
+    </mat-card-content>
+
+    <mat-card-actions align="end">
+      <button mat-button type="button" (click)="clear()">Clear</button>
+      <button mat-button type="button" (click)="testConnection()">Test connection</button>
+      <button mat-flat-button type="submit">Save</button>
+    </mat-card-actions>
+  </form>
+</mat-card>

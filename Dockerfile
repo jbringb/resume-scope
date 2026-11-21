@@ -1,6 +1,17 @@
 # syntax=docker/dockerfile:1
 
-# ---- Stage 1: build the layered boot jar inside Docker ----
+# ---- Stage 1: build the Angular frontend ----
+# Its typed API client is generated from openapi.json, so the spec is copied in at the path the
+# generator expects (../src/main/resources/static/openapi.json, relative to web/).
+FROM node:26-alpine AS web
+WORKDIR /workspace/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY web/ ./
+COPY src/main/resources/static/openapi.json ../src/main/resources/static/openapi.json
+RUN npm run build
+
+# ---- Stage 2: build the layered boot jar inside Docker ----
 # Self-contained: jOOQ codegen parses the Flyway migration SQL directly
 # (DDLDatabase, no live database), so the build needs no database — the jOOQ
 # sources are generated under build/ during compile and are never committed.
@@ -14,12 +25,15 @@ COPY gradlew settings.gradle build.gradle ./
 COPY gradle ./gradle
 RUN chmod +x ./gradlew
 
-# Build, then split the fat jar into layers (Spring Boot 4 'tools' jarmode).
+# Build, then split the fat jar into layers (Spring Boot 4 'tools' jarmode). The Angular build goes
+# into static/ next to openapi.json, so Spring Boot serves the app (SpaFallbackFilter handles its
+# client-side routes).
 COPY src ./src
+COPY --from=web /workspace/web/dist/resume-scope-web/browser/ ./src/main/resources/static/
 RUN ./gradlew --no-daemon clean bootJar \
  && java -Djarmode=tools -jar build/libs/resume-scope.jar extract --layers --destination build/extracted
 
-# ---- Stage 2: minimal runtime ----
+# ---- Stage 3: minimal runtime ----
 FROM eclipse-temurin:25-jre-alpine
 WORKDIR /app
 
