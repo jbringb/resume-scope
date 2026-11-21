@@ -53,6 +53,7 @@ Root package `dev.jbringb.resume_scope`:
 5. **No secrets in code or commits.** `OPENAI_API_KEY` and DB credentials come from the environment.
 6. **Never point jOOQ's codegen `target.directory` at a directory containing hand-written sources.** jOOQ's directory-cleanup once deleted every non-generated file under `src/main/java` when it was configured that way — codegen output must stay under `build/`.
 7. **Dependency upgrades and CVE checks → the `upgrade-deps` skill.** Dependabot version-update PRs are off; a monthly scheduled run uses this skill and opens a PR. jOOQ, the Flyway plugin and Spring AI are pinned in lockstep with Spring Boot — never bump them to "latest".
+8. **Prompt, output-schema, model or Spring AI change → run the scoring eval** (`scoring-eval` skill): `python smoke_test/eval.py --repeat 3`. Unit tests mock the LLM, so they can't catch a scoring regression; the eval (and the smoke test) check real scores against `smoke_test/scoring.py`.
 
 ## Commit conventions
 
