@@ -17,6 +17,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jooq.JSONB;
@@ -55,8 +56,9 @@ public class CvAnalyzerService {
     @Value("${analysis.cost.eur-per-1k-completion-tokens}")
     private BigDecimal eurPer1kCompletionTokens;
 
-    // High-signal phrases a candidate might use to try to steer their own score. Used for logging
-    // (attack visibility); the prompt itself is what actually neutralizes injection.
+    // High-signal phrases a candidate might use to try to steer their own score. A match is logged and
+    // flagged to the recruiter in the weaknesses; the prompt itself is what actually neutralizes
+    // injection.
     private static final List<String> INJECTION_MARKERS = List.of(
             "ignore previous",
             "ignore all previous",
@@ -72,6 +74,11 @@ public class CvAnalyzerService {
             "rate me 100",
             "as an ai",
             "respond only with");
+
+    // Added by the app, not the model: gpt-4o-mini resists injected instructions but, despite the
+    // prompt asking, almost never mentions the attempt, so recruiters would otherwise never see it.
+    static final String INJECTION_WEAKNESS =
+            "The CV contains text that tries to instruct the AI screener (possible prompt injection); it was ignored.";
 
     public Mono<Void> processAnalysisRun(UUID runId) {
         return analysisRunRepo
@@ -134,7 +141,8 @@ public class CvAnalyzerService {
 
     private Mono<TokenUsage> analyzeAndInsert(JobRoleRecord role, CandidateRecord candidate, UUID runId) {
         var cvText = candidate.getCvText() == null ? "" : candidate.getCvText();
-        if (looksLikePromptInjection(cvText)) {
+        boolean injection = looksLikePromptInjection(cvText);
+        if (injection) {
             log.warn(
                     "Possible prompt-injection content in CV '{}' (run {}) — it is passed as delimited data only.",
                     candidate.getOriginalFilename(),
@@ -143,6 +151,10 @@ public class CvAnalyzerService {
         return analyzeWithLlm(role, candidate, cvText).flatMap(result -> {
             var ai = result.analysis();
             var score = Math.clamp(ai.overallScore(), 0, 100);
+            var weaknesses = injection
+                    ? Stream.concat(ai.weaknesses().stream(), Stream.of(INJECTION_WEAKNESS))
+                            .toList()
+                    : ai.weaknesses();
             return analysisRepo
                     .insert(
                             candidate.getId(),
@@ -150,7 +162,7 @@ public class CvAnalyzerService {
                             score,
                             null,
                             jsonArray(ai.strengths()),
-                            jsonArray(ai.weaknesses()),
+                            jsonArray(weaknesses),
                             ai.summary(),
                             ai.recommendation(),
                             emptyToNull(ai.extractedName()),
@@ -303,7 +315,8 @@ public class CvAnalyzerService {
                         outputConverter.getFormat());
     }
 
-    // Heuristic, for logging only — flags CV text that contains common score-manipulation phrasing.
+    // Heuristic — flags CV text that contains common score-manipulation phrasing. It never changes the
+    // score; it only drives the warning log and the INJECTION_WEAKNESS flag.
     static boolean looksLikePromptInjection(String cvText) {
         if (cvText == null || cvText.isBlank()) {
             return false;
