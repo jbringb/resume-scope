@@ -293,7 +293,7 @@ OPENAI_API_KEY=sk-... ./gradlew bootRun
 ## Testing & Code Quality
 
 ```bash
-./gradlew test          # unit tests (JUnit 5 + Mockito + AssertJ) — no database required
+./gradlew test          # all tests (JUnit 5 + Mockito + AssertJ); 3 integration test classes start Postgres via Testcontainers, so need Docker
 ./gradlew spotlessApply # auto-format (Palantir Java Format, 120 columns)
 ./gradlew check         # spotlessCheck + tests
 ```
@@ -341,4 +341,9 @@ python smoke_test/eval.py --repeat 3
 
 ## AI-assisted development
 
-This repo is set up for agentic AI coding tools. [`CLAUDE.md`](CLAUDE.md) documents the architecture and conventions, and [`.claude/skills/`](.claude/skills/) provides step-by-step playbooks for the two schema/API workflows that span multiple layers (adding a Flyway migration + jOOQ regen, and adding a REST endpoint with its OpenAPI update).
+This repo is set up for agentic AI coding tools. [`CLAUDE.md`](CLAUDE.md) documents the architecture and conventions, and [`.claude/skills/`](.claude/skills/) provides step-by-step playbooks:
+
+- `add-db-migration`: a Flyway migration plus jOOQ regeneration.
+- `add-rest-endpoint`: a REST endpoint with its OpenAPI update.
+- `upgrade-deps`: dependency and CVE checks under the Spring Boot lockstep rules. A monthly scheduled run uses it to open an upgrade PR.
+- `scoring-eval`: checks the real LLM's scoring before a prompt or model change ships.

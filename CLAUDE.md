@@ -1,102 +1,135 @@
 # CLAUDE.md — ResumeScope
 
-Guidance for Claude Code (and other AI assistants) working in this repository. Keep it accurate when practices change.
+Guidance for AI coding agents in this repository. When you change something this file describes (layout, a convention, a rule, a workflow), update it in the same change.
 
 ## What this is
 
-ResumeScope is an AI-powered CV/resume analysis API. An admin creates a **job role**, uploads candidate **PDFs**, and triggers an **analysis run**. A background LLM call scores each CV (0–100) against the role, extracts name/email, summarizes strengths/weaknesses, and the candidates are **ranked** by descending score.
+ResumeScope is an AI-powered CV analysis API. An admin creates a **job role**, uploads candidate **PDFs** and triggers an **analysis run**. A background LLM call scores each CV 0–100 against the role, extracts name and email, lists strengths and weaknesses, and the candidates are **ranked** by score.
 
 ## Tech stack
 
-- **Build:** Gradle, **Java 25** toolchain
-- **Framework:** Spring Boot **4.2.0**, Spring **WebFlux** — reactive **end-to-end** (jOOQ over R2DBC; no `Mono.fromCallable` wrapping of blocking DB calls)
-- **AI:** Spring AI **2.1.0**, OpenAI starter — model `gpt-4o-mini`, temperature `0.0`. Swappable to a local OpenAI-compatible server (vLLM) via the `local-vllm` profile.
-- **Persistence:** PostgreSQL + **jOOQ 3.21** (type-safe SQL; keep in lockstep with the version Spring Boot manages) executed **reactively over R2DBC** at runtime (`r2dbc-postgresql`; repos return `Mono`/`Flux`). **Flyway 12** (Boot-managed; the Gradle `flyway` plugin is pinned to the same version) runs migrations over a **JDBC** connection at startup (`spring.flyway.url`; Flyway has no R2DBC support). The jOOQ `DSLContext` is built from the R2DBC `ConnectionFactory` in `config/PersistenceConfiguration` (this makes Boot's JDBC jOOQ auto-config back off). jOOQ **codegen** parses the Flyway migration SQL directly (`DDLDatabase`, no live database) and outputs to `build/generated-jooq` — **not committed**, regenerated on every build.
-- **PDF:** Apache PDFBox 3.0.8
-- **Observability:** Micrometer + `micrometer-registry-prometheus`, scraped at `GET /actuator/prometheus` (only endpoint exposed — see `application.yaml`'s `management.*`). Four custom business metrics live in `CvAnalyzerService` (`resumescope.analysis.runs`, `.tokens`, `.llm.cost.eur`, `.llm.call.duration`); see the README's Observability section and `deploy/grafana/`.
-- **Boilerplate:** Lombok
-- **Formatting:** Spotless 8.12 with Palantir Java Format (120-col)
+- **Java 25** (Gradle toolchain), Gradle wrapper. No preview features.
+- **Spring Boot 4 + WebFlux**, reactive end to end.
+- **Spring AI 2**, OpenAI `gpt-4o-mini` at temperature `0.0`. The `local-vllm` profile swaps in any OpenAI-compatible server.
+- **PostgreSQL**: queries via **jOOQ over R2DBC** (repos return `Mono`/`Flux`); migrations via **Flyway over JDBC** at startup (Flyway has no R2DBC support).
+- **Jackson 3**, **Testcontainers 2**, JUnit 5 + Mockito + AssertJ, PDFBox 3, Lombok, Micrometer + Prometheus, Spotless + Palantir Java Format (120 columns).
+- Exact versions live in [build.gradle](build.gradle) and Spring Boot's BOM. Don't copy version numbers into this file; they go stale.
 
-## Architecture
+## Layout
 
 Root package `dev.jbringb.resume_scope`:
 
-- `api/` — REST controllers (`JobRoleController`, `JobRoleCandidateController`, `JobRoleAnalysisController`, `AnalysisRunController`, `UsageController`)
-  - `api/dto/` — request/response **records**
-- `service/` — business logic (`JobRoleService`, `CandidateService`, `AnalysisService`, `CvAnalyzerService`, `AnalysisEventBus`, idempotency lock)
-- `repository/` — jOOQ data access (`*Repository`), reactive: methods return `Mono`/`Flux` (`Mono.from(...)`/`Flux.from(...)` over jOOQ R2DBC publishers)
-- `config/` — `ChatClientConfiguration` (Spring AI `ChatClient` + `ObjectMapper`), `PersistenceConfiguration` (jOOQ `DSLContext` over the R2DBC `ConnectionFactory`), `ApiKeyAuthFilter`, `ApiKeySeeder`, `ApiKeyHashing`
-- `pdf/` — `PdfTextExtractor` (PDFBox → text)
-- `db/generated/` — **jOOQ-generated code**, produced under `build/generated-jooq` at build time (package `dev.jbringb.resume_scope.db.generated`). Not committed; never hand-edit — regenerate instead.
+- `api/`: REST controllers (`JobRole`, `JobRoleCandidate`, `JobRoleAnalysis`, `AnalysisRun` incl. SSE, `Usage`, `Health`). `api/dto/` holds request/response records.
+- `service/`:
+  - `AnalysisService`: trigger, idempotency, budget, run lookups.
+  - `CvAnalyzerService`: the prompt, the LLM call, scoring, ranking, metrics.
+  - `JobRoleService`, `CandidateService` (PDF upload).
+  - `AnalysisEventBus`: SSE fan-out.
+  - The Postgres advisory locks and transactions sit behind small interfaces (`AnalysisTriggerIdempotencyLock`, `ApiKeyBudgetLock`, `TransactionRunner`, each with a `Postgres*` implementation), so services stay unit-testable.
+- `repository/`: jOOQ queries, reactive (`Mono.from(...)`/`Flux.from(...)` over jOOQ's R2DBC publishers).
+- `config/`:
+  - `ChatClientConfiguration`.
+  - `PersistenceConfiguration`: the jOOQ `DSLContext` built on the R2DBC `ConnectionFactory`, which makes Boot's JDBC jOOQ auto-config back off.
+  - `ApiKeyAuthFilter`, `ApiKeySeeder`, `ApiKeyHashing`.
+  - `GlobalExceptionHandler`: errors as `ProblemDetail`.
+- `pdf/PdfTextExtractor`: PDFBox to text.
+- `db/generated/`: jOOQ code generated into `build/generated-jooq` on every compile from the migration SQL (no database needed). Not committed; never edit it.
+- Migrations: `src/main/resources/db/migration/V<n>__<desc>.sql`. API contract: `src/main/resources/static/openapi.json` (served at `/openapi.json`).
+- `smoke_test/`: end-to-end smoke test and scoring eval (Python). `deploy/`: AWS and Render deployment plus Grafana dashboards.
 
-**Async analysis flow (reactive):** `AnalysisService.triggerAnalysis` returns `Mono<TriggerAnalysisResponse>`, is idempotent (optional `Idempotency-Key` header, Postgres advisory lock via jOOQ `transactionPublisher`), and returns **202 + runId** → `CvAnalyzerService.processAnalysisRun(runId)` (a `Mono<Void>` subscribed fire-and-forget on `boundedElastic`) calls the LLM per candidate, clamps scores to 0–100, inserts results, **ranks 1..N by score desc**, sets run status `COMPLETED`/`FAILED`, records prompt/completion token counts and an estimated EUR cost, and publishes to `AnalysisEventBus`. The PENDING insert auto-commits before processing is dispatched, so there is **no** `afterCommit` synchronization (and no visibility race). Clients poll `GET /api/analysis-runs/{runId}` **or** subscribe to the SSE stream `GET /api/analysis-runs/{runId}/events` (`AnalysisRunController` filters `AnalysisEventBus.stream()` by run id, completing on terminal status). Runs have a **timeout** (`analysis.run-timeout-minutes`, default 10): a `PENDING`/`RUNNING` run older than that is lazily marked `FAILED` on next access, and an expired idempotency key starts a fresh run. The LLM call (blocking) is offloaded to `boundedElastic` and inherits `spring.http.client.read-timeout`.
+## How an analysis runs
 
-**API keys & per-key cost budget:** `ApiKeyAuthFilter` resolves `X-API-Key` against the `api_key` table (SHA-256 hash lookup, never plaintext) and stashes the matched `api_key.id` on the exchange (`ApiKeyAuthFilter.resolvedApiKeyId`). `ApiKeySeeder` (an `ApplicationRunner`) seeds the legacy `security.api-key`/`API_KEY` env var as a row named `"default"` on every boot (idempotent upsert via `ON CONFLICT DO NOTHING`), so existing single-key deployments keep working unchanged. Auth is enabled iff the `security.api-key`/`API_KEY` env var is set — decided from config at startup, not from whether the `api_key` table has rows, so there is no fail-open window during seeding; when it is unset, auth is inert (the "open in local/dev" default). Each key can carry its own `monthly_budget_eur` override; `AnalysisService.checkBudget`/`monthlyUsage` resolve the effective budget (key override, else the global `analysis.cost.monthly-budget-eur` default) and scope usage sums to that key's `analysis_run.api_key_id` (or `IS NULL` when auth is disabled).
+1. `POST /api/job-roles/{id}/analyze` → `AnalysisService.triggerAnalysis`. An optional `Idempotency-Key` header replays the active run for the same role and key, serialized by an advisory lock.
+2. Under a per-API-key advisory lock, the run is rejected with **429** if one is already active for the key or the month's spend has reached the budget. Otherwise a `PENDING` run is inserted (it auto-commits, so no `afterCommit` hook is needed) and **202 + runId** is returned.
+3. `CvAnalyzerService.processAnalysisRun` runs fire-and-forget on `boundedElastic`:
+   - marks the run `RUNNING`;
+   - makes one LLM call per candidate, then clamps the score to 0–100 and inserts the result;
+   - ranks the candidates 1..N by score;
+   - marks the run `COMPLETED` with token counts and an estimated EUR cost (or `FAILED`);
+   - publishes to `AnalysisEventBus`.
+4. Clients poll `GET /api/analysis-runs/{runId}` or stream `GET /api/analysis-runs/{runId}/events` (SSE, completes on a terminal status).
+5. A `PENDING`/`RUNNING` run older than `analysis.run-timeout-minutes` (default 10) is marked `FAILED` on its next access, and an expired idempotency key starts a fresh run.
 
-## Conventions (observed in code — follow them)
+## LLM prompt and injection defenses (`CvAnalyzerService`) — don't weaken
 
-- **Services:** type suffix `Service`; injected fields/locals end in **`Svc`** (e.g. `JobRoleService jobRoleSvc`). Never `jobRoleService`.
-- **Repositories:** type suffix `Repository`; injected fields/locals end in **`Repo`** (e.g. `jobRoleRepo`).
-- **DTOs are records** (immutable). Persistence uses jOOQ `*Record` types. LLM JSON is parsed into a `CvAnalysisResult` record annotated `@JsonIgnoreProperties(ignoreUnknown = true)`.
-- **Validation:** request records use Jakarta constraints (e.g. `JobRoleRequest` uses `@NotBlank`, `@Size`). Match this on new request bodies.
-- **Lombok:** constructor injection via `@RequiredArgsConstructor`; `@Slf4j` for logging. Don't hand-write boilerplate Lombok covers.
-- **`var`:** use only when the type is obvious from the right-hand side (constructor/factory/clearly-named method). Avoid for bare numerics or surprising generics.
-- **Comments:** explain only the non-obvious (why, invariants, special cases). Prefer clear names and small methods.
-- **Modern Java:** prefer records, sealed types, pattern matching, text blocks where they genuinely simplify. No preview features (`--enable-preview`).
+- The CV is **untrusted data**: the prompt says never to obey it, and it sits inside a random per-call fence it can't predict.
+- The prompt states the **0–100 scale** explicitly. The generated schema only says "integer", and the model once drifted to 0–10. A unit test pins this.
+- `looksLikePromptInjection` (a phrase list) logs a warning and appends `INJECTION_WEAKNESS` to the stored weaknesses. It never changes the score. The model resists injected instructions but rarely mentions them on its own.
+- The reply is parsed by `BeanOutputConverter` into the `CvAnalysisResult` record (`@JsonIgnoreProperties(ignoreUnknown = true)`).
+- Changing the prompt, the schema, the model or Spring AI means running the scoring eval (golden rule 8).
 
-## Golden rules for agents
+## API keys and budget
 
-1. **Schema change → regenerate jOOQ.** After editing/adding a Flyway migration, run `./gradlew generateJooq` — it reads the migration SQL directly, so **no database is needed**. (`flywayMigrate` against a running Postgres is only needed to actually apply the schema for local running/testing.) See the `add-db-migration` skill.
-2. **REST change → update the OpenAPI spec** in the same change. Source of truth: `src/main/resources/static/openapi.json` (served at `/openapi.json`). See the `add-rest-endpoint` skill.
+- `ApiKeyAuthFilter` checks `X-API-Key` on `/api/**` against the `api_key` table by SHA-256 hash (never plaintext), and stores the key id on the exchange (`ApiKeyAuthFilter.resolvedApiKeyId`). `/health` is always open; it's the platform health check.
+- Auth is on **iff** `security.api-key` / `API_KEY` is set. This is decided from config at startup, so there's no fail-open window while seeding. Unset means open (local/dev).
+- `ApiKeySeeder` upserts `API_KEY` as the row `"default"` on every boot (`ON CONFLICT DO NOTHING`). Further keys currently need a manual `INSERT`; there's no admin endpoint.
+- Budget: the key's `monthly_budget_eur`, else `analysis.cost.monthly-budget-eur`. Usage is summed per `analysis_run.api_key_id` (`IS NULL` when auth is off).
+
+## Conventions
+
+- **Naming:** services end in `Service`, and injected fields/locals in **`Svc`** (`JobRoleService jobRoleSvc`, never `jobRoleService`). Repositories end in `Repository`, and fields in **`Repo`** (`jobRoleRepo`).
+- **Records** for DTOs and LLM output; jOOQ `*Record` types for persistence.
+- **Validation:** request records use Jakarta constraints (`@NotBlank`, `@Size`, as in `JobRoleRequest`).
+- **Errors:** throw `ResponseStatusException`. `GlobalExceptionHandler` renders every error as RFC 9457 `ProblemDetail`; don't build error bodies by hand.
+- **Reactive:** never block in a reactive chain. Blocking work (the LLM call, PDF parsing) goes in `Mono.fromCallable(...).subscribeOn(Schedulers.boundedElastic())`. Never wrap DB calls that way; they're already reactive.
+- **Jackson 3:** `ObjectMapper` etc. come from `tools.jackson.*`, but annotations are still `com.fasterxml.jackson.annotation.*`.
+- **Testcontainers 2:** `org.testcontainers.postgresql.PostgreSQLContainer` (not generic), artifacts `testcontainers-postgresql` / `testcontainers-junit-jupiter`.
+- **Lombok:** `@RequiredArgsConstructor` for injection and `@Slf4j` for logging.
+- **`var`** only when the type is obvious from the right-hand side.
+- **Comments** explain only the non-obvious: the why, invariants, special cases.
+- **Modern Java** (records, sealed types, pattern matching, text blocks) where it genuinely simplifies.
+
+## Golden rules
+
+1. **Schema change → new Flyway migration, then `./gradlew generateJooq`** (reads the SQL, no database needed). See the `add-db-migration` skill.
+2. **REST change → update `openapi.json` in the same change.** See the `add-rest-endpoint` skill.
 3. **Format before finishing:** `./gradlew spotlessApply`. CI runs `spotlessCheck`.
-4. **Never edit `db/generated/**`** — it's jOOQ output under `build/`, regenerated on every build; edits are silently discarded.
-5. **No secrets in code or commits.** `OPENAI_API_KEY` and DB credentials come from the environment.
-6. **Never point jOOQ's codegen `target.directory` at a directory containing hand-written sources.** jOOQ's directory-cleanup once deleted every non-generated file under `src/main/java` when it was configured that way — codegen output must stay under `build/`.
-7. **Dependency upgrades and CVE checks → the `upgrade-deps` skill.** Dependabot version-update PRs are off; a monthly scheduled run uses this skill and opens a PR. jOOQ, the Flyway plugin and Spring AI are pinned in lockstep with Spring Boot — never bump them to "latest".
-8. **Prompt, output-schema, model or Spring AI change → run the scoring eval** (`scoring-eval` skill): `python smoke_test/eval.py --repeat 3`. Unit tests mock the LLM, so they can't catch a scoring regression; the eval (and the smoke test) check real scores against `smoke_test/scoring.py`.
+4. **Never edit `db/generated/**`.** It's regenerated on every build, and edits are silently lost.
+5. **Never point jOOQ codegen's `target.directory` at hand-written sources.** Its cleanup once deleted every non-generated file under `src/main/java`.
+6. **No secrets in code, commits or output.** `OPENAI_API_KEY`, `API_KEY` and DB credentials come from the environment. Never print `smoke_test/.env`.
+7. **Dependency upgrades and CVE checks → the `upgrade-deps` skill.** jOOQ, the Flyway plugin and Spring AI are pinned in lockstep with Spring Boot; never bump them to "latest". Dependabot version updates are off; a monthly scheduled run uses the skill and opens a PR.
+8. **Prompt, output-schema, model or Spring AI change → `python smoke_test/eval.py --repeat 3`** (the `scoring-eval` skill). Unit tests mock the LLM, so only the eval and the smoke test catch a scoring regression.
 
-## Commit conventions
+## Verifying a change
 
-Use [Conventional Commits](https://www.conventionalcommits.org/) — `type: short imperative summary`:
+- **Small change:** `./gradlew spotlessApply`, then the affected test classes: `./gradlew test --tests 'dev.jbringb.resume_scope.service.CvAnalyzerServiceTest'`.
+- **Broad or shared change:** `./gradlew check` (Spotless plus all tests). `AnalysisFlowIntegrationTest`, `ApiKeyFlowIntegrationTest` and `AnalysisRepositoryTest` use Testcontainers and **need Docker**. Without Docker, skip them and say so; CI runs everything on every push and PR to `main`.
+- **End to end** (real Docker image plus live OpenAI, about €0.003, a few minutes): `API_KEY="smoke-$(date +%s)" python smoke_test/smoke.py`.
+  - Needs `smoke_test/.env` with `OPENAI_API_KEY` and `pip install reportlab`.
+  - It also fails when scores break `smoke_test/scoring.py`.
+  - Also available as the manual **Smoke Test** GitHub workflow.
 
-- `feat:` — new functionality
-- `fix:` — bug fix
-- `refactor:` — restructuring with no behavior change
-- `chore:` — tooling, CI, build, or deployment changes (no app behavior change)
+## Skills (`.claude/skills/`)
 
-Keep each commit focused on one logical change.
+- `add-db-migration`: schema changes.
+- `add-rest-endpoint`: endpoint plus DTOs, service, repository and OpenAPI.
+- `upgrade-deps`: version and CVE checks with the lockstep rules.
+- `scoring-eval`: checks the LLM's real scoring before shipping prompt or model changes.
 
-## Build & run
+## Commits
+
+[Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `refactor:`, `chore:` (tooling, CI, build, deploy). Commits are **one-line subjects only**: no body and no attribution trailers (`Co-Authored-By`, "Generated with …"), in commits and PR bodies alike. One logical change per commit.
+
+## Build and run
 
 ```bash
-docker compose up -d postgres                 # start Postgres (resumescope/resumescope on :5432) — only needed to run/test the app
-./gradlew flywayMigrate                        # apply migrations to the running Postgres (needed to run/test locally)
-OPENAI_API_KEY=sk-... ./gradlew bootRun        # run the app on :8086
-./gradlew spotlessApply                        # format
-./gradlew test                                 # unit tests (JUnit 5 + Mockito)
-./gradlew check                                # spotlessCheck + tests
-./gradlew bootJar                              # build build/libs/resume-scope.jar
-docker compose up --build                      # full stack (Postgres + app) — image builds itself
+docker compose up -d postgres                 # Postgres (resumescope/resumescope on :5432)
+./gradlew flywayMigrate                       # apply migrations to it (only to run the app locally)
+OPENAI_API_KEY=sk-... ./gradlew bootRun       # app on :8086; health: GET /health
+./gradlew test                                # all tests (three classes need Docker)
+./gradlew bootJar                             # build/libs/resume-scope.jar
+docker compose up --build                     # full stack; the image compiles from source
 ```
 
-- App port **8086**; health check: `GET /health` (open). `GET /api/job-roles` is a sanity check but requires `X-API-Key` when `API_KEY` is set.
-- Local LLM (no OpenAI key): start a vLLM server on `:8000`, then `SPRING_PROFILES_ACTIVE=local-vllm ./gradlew bootRun`.
-- **jOOQ codegen needs no database** — it parses the migration SQL directly and runs automatically on compile (`generateSchemaSourceOnCompilation = true`), so plain `./gradlew test`/`build`/`bootJar` work fully offline.
-- The [`Dockerfile`](Dockerfile) is a **self-building multi-stage** image: it compiles the boot jar from source inside Docker (no host `bootJar` needed, no database reachable during the image build) and extracts Spring Boot layers via the `tools` jarmode. This is what all deployment targets build.
+- Local LLM: start vLLM on `:8000`, then `SPRING_PROFILES_ACTIVE=local-vllm ./gradlew bootRun`.
+- The [`Dockerfile`](Dockerfile) is multi-stage and self-building (no host jar, no database during the build). Every deployment target (Render, AWS) builds it; see the README's Deployments section.
 
-## Config & environment
+## Config and environment
 
-- `application.yaml` (defaults) + `application-local-vllm.yaml` (`local-vllm` profile).
-- **App runtime DB env:** `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD` feed **both** R2DBC (runtime queries, `spring.r2dbc.*`) and Flyway (migrations, `spring.flyway.url`). Override explicitly with `SPRING_R2DBC_URL` and/or `SPRING_DATASOURCE_URL` (the latter is Flyway's JDBC URL). Same Postgres for both.
-- **Gradle Flyway/jOOQ tasks** use separate vars: `DB_URL`/`DB_USER`/`DB_PASSWORD` (or `-Pdb.url=` etc.), default `jdbc:postgresql://localhost:5432/resumescope`.
-- **AI:** `OPENAI_API_KEY` (required at runtime), optional `OPENAI_BASE_URL`, `OPENAI_MODEL`.
-- **Auth:** `API_KEY` seeds a `"default"` row in the `api_key` table on boot (`ApiKeySeeder`); `ApiKeyAuthFilter` (a reactive `WebFilter`) then resolves `X-API-Key` against that table on every `/api/**` request. Empty/no keys configured = disabled (local/dev). `/health` is always open and is the platform health-check path. Additional keys (with their own name/budget) currently need a manual `INSERT` — no admin endpoint yet. Update `openapi.json` (`ApiKeyAuth` scheme) if the auth contract changes.
-- **Server:** `PORT` (default 8086).
-
-## Key files
-
-- [build.gradle](build.gradle) — toolchain, deps, jOOQ + Flyway + Spotless config
-- [application.yaml](src/main/resources/application.yaml) — runtime config
-- [openapi.json](src/main/resources/static/openapi.json) — API contract (keep in sync)
-- `src/main/resources/db/migration/` — Flyway migrations V1–V7
-- `src/main/java/dev/jbringb/resume_scope/service/` — core logic
+- `application.yaml` holds the defaults; `application-local-vllm.yaml` is the `local-vllm` profile.
+- **DB (app):** `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD` feed both R2DBC (`spring.r2dbc.*`) and Flyway (`spring.flyway.url`). Override with `SPRING_R2DBC_URL` / `SPRING_DATASOURCE_URL` (Flyway's JDBC URL).
+- **DB (Gradle `flyway*` tasks):** `DB_URL`/`DB_USER`/`DB_PASSWORD` (or `-Pdb.url=` etc.), default `jdbc:postgresql://localhost:5432/resumescope`.
+- **AI:** `OPENAI_API_KEY` (required at runtime), optional `OPENAI_BASE_URL`, `OPENAI_MODEL`. The LLM call times out after `spring.http.client.read-timeout` (60s).
+- **Auth:** `API_KEY`; see API keys above. If the auth contract changes, update `openapi.json`'s `ApiKeyAuth` scheme.
+- **Analysis:** `ANALYSIS_RUN_TIMEOUT_MINUTES` (10), `ANALYSIS_COST_MONTHLY_BUDGET_EUR` (5.00).
+- **Server:** `PORT` (8086). Only `/actuator/prometheus` is exposed; the custom metrics `resumescope.analysis.*` are defined in `CvAnalyzerService`, and the dashboards are in `deploy/grafana/`.
