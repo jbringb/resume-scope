@@ -52,6 +52,7 @@ Root package `dev.jbringb.resume_scope`:
 4. **Never edit `db/generated/**`** — it's jOOQ output under `build/`, regenerated on every build; edits are silently discarded.
 5. **No secrets in code or commits.** `OPENAI_API_KEY` and DB credentials come from the environment.
 6. **Never point jOOQ's codegen `target.directory` at a directory containing hand-written sources.** jOOQ's directory-cleanup once deleted every non-generated file under `src/main/java` when it was configured that way — codegen output must stay under `build/`.
+7. **Dependency upgrades and CVE checks → the `upgrade-deps` skill.** Dependabot version-update PRs are off; a monthly scheduled run uses this skill and opens a PR. jOOQ, the Flyway plugin and Spring AI are pinned in lockstep with Spring Boot — never bump them to "latest".
 
 ## Commit conventions
 
